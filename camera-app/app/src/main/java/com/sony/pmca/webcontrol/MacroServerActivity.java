@@ -4,10 +4,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Color;
 import android.hardware.Camera;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -62,10 +64,12 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
     private FocusScaleView m_focusScaleView;
     private TextView m_tvCameraStatus;
+    private TextView m_tvBattery;
     private TextView m_tvWifiStatus;
 
     private WifiManager m_wifiManager;
     private BroadcastReceiver m_networkStateReceiver;
+    private BroadcastReceiver m_batteryReceiver;
     private MacroHttpServer m_httpServer;
     private int m_httpPort = MacroHttpServer.DEFAULT_PORT;
     private String m_wifiIp = "0.0.0.0";
@@ -111,6 +115,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
         m_focusScaleView = (FocusScaleView) findViewById(R.id.vFocusScale);
         m_tvCameraStatus = (TextView) findViewById(R.id.tvCameraStatus);
+        m_tvBattery = (TextView) findViewById(R.id.tvBattery);
         m_tvWifiStatus = (TextView) findViewById(R.id.tvWifiStatus);
 
         m_wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
@@ -118,6 +123,12 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             @Override
             public void onReceive(Context context, Intent intent) {
                 updateWifiStatus();
+            }
+        };
+        m_batteryReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                updateBatteryView(intent);
             }
         };
     }
@@ -128,6 +139,10 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         setAutoPowerOffMode(false);
 
         registerReceiver(m_networkStateReceiver, new IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION));
+        Intent stickyBattery = registerReceiver(m_batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (stickyBattery != null) {
+            updateBatteryView(stickyBattery);
+        }
         try {
             m_wifiManager.setWifiEnabled(true);
         } catch (Throwable t) {
@@ -518,6 +533,10 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         } catch (Throwable ignored) {
         }
         try {
+            unregisterReceiver(m_batteryReceiver);
+        } catch (Throwable ignored) {
+        }
+        try {
             m_wifiManager.setWifiEnabled(false);
         } catch (Throwable ignored) {
         }
@@ -639,6 +658,29 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         } catch (Throwable t) {
             m_tvWifiStatus.setText("Wi-Fi: error");
         }
+    }
+
+    private void updateBatteryView(Intent intent) {
+        if (intent == null || m_tvBattery == null) return;
+        int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+        int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+        if (level < 0 || scale <= 0) return;
+        final int pct = (level * 100) / scale;
+        final int color;
+        if (pct < 15) {
+            color = Color.parseColor("#FF5555");
+        } else if (pct <= 30) {
+            color = Color.parseColor("#FFD700");
+        } else {
+            color = Color.parseColor("#00FF88");
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                m_tvBattery.setText(pct + "%");
+                m_tvBattery.setTextColor(color);
+            }
+        });
     }
 
     private void updateStatusText() {
