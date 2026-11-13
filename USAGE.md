@@ -2,7 +2,7 @@
 
 This document is the complete reference for building, flashing, and developing clients or AI Agents against **Sony PMCA WebControl** (`com.sony.pmca.webcontrol`).
 
-The camera-side application is a **universal, stateless hardware bridge** exposing Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Sony Scalar static/system classes over a single JSON RPC endpoint (`POST /api/call`) plus real-time state/event streaming (`GET /api/state`, `GET /api/events`). Higher-level workflows (closed-loop focus positioning, target aperture/shutter stepping, and automated focus bracketing) live entirely in client SDKs (`client/pmca_client.py`).
+The camera-side application is a **universal, stateless hardware bridge** exposing Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Sony Scalar static/system classes over a single JSON RPC endpoint (`POST /api/call`) plus real-time state/event streaming (`GET /api/state`, `GET /api/events`). Higher-level workflows (closed-loop focus positioning, focus peaking, live histogram, and automated focus bracketing) live in the web client (`web-client/`).
 
 ---
 
@@ -182,39 +182,23 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 
 ---
 
-## Part 3: Python Client SDK (`client/pmca_client.py`)
+## Part 3: Web Client (`web-client/`)
 
-`SonyPmcaClient` wraps `/api/call`, `/api/describe`, `/api/state`, `/api/events`, and implements client-side closed-loop workflows:
+The React + TypeScript + Vite web frontend wraps `/api/call`, `/api/describe`, `/api/state`, `/api/events`, `/api/liveview.jpg`, and `/api/photos` in `web-client/src/api/cameraClient.ts`:
 
-```python
-from client.pmca_client import SonyPmcaClient
-
-cam = SonyPmcaClient("192.168.0.250", 8080)
-
-# 1. Discover available methods & hardware capabilities
-methods = cam.describe(target="camera", query="Focus")
-caps = cam.capabilities()
-battery = cam.get_battery()
-temp = cam.get_temperature()
-
-# 2. Direct single or batched RPC calls
-cam.camera("incrementAperture")
-cam.modifier("setISOSensitivity", 400)
-cam.batch_call([
-    {"target": "modifier", "method": "setISOSensitivity", "args": [100]},
-    {"target": "modifier", "method": "setDROMode", "args": ["off"]},
-    {"target": "params", "method": "set", "args": ["exposure-compensation", "-3"]},
-])
-
-# 3. Client-side closed-loop focus positioning
-cam.goto_focus(350)
-
-# 4. Capture, wait for StoreImageComplete event, and download exact file
-cam.capture_and_download("shot_001.jpg")
-
-# 5. Client-side automated focus bracketing stack with local download
-cam.focus_stack(min_pos=120, max_pos=420, shots=25, save_dir="./stack_output")
+```bash
+cd web-client
+npm install
+npm run dev       # Local dev server (http://localhost:5173)
+npm run build     # Outputs single self-contained web-client/dist/index.html
 ```
+
+Features included in the initial web UI:
+* **LiveView**: Canvas-based `/api/liveview.jpg` stream with client-side Focus Peaking, rule-of-thirds grid, and live luma histogram.
+* **Exposure & Capture**: Real-time aperture, shutter speed, ISO controls, and shutter release.
+* **Focus & Stacking**: Multi-speed manual focus stepping (`startOneShotFocusDrive`), power zoom, and client-side closed-loop focus bracketing.
+* **Photo Browser**: Non-recursive SD card directory navigation (`/api/photos?dir=...`), preview modal, and download.
+* **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
 
 ---
 
