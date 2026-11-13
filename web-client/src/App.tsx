@@ -87,8 +87,11 @@ export function App() {
           }
         }
         if (targets.length === 0) {
+          const now = new Date();
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
           targets.push({
-            name: rawFileName || `capture_${Date.now()}.jpg`,
+            name: rawFileName || `DSC_${stamp}_${ev.seq}.jpg`,
             url: client.latestPhotoUrl(Date.now()),
           });
         }
@@ -132,7 +135,7 @@ export function App() {
           if (res.events && res.events.length > 0) {
             setEvents((prev) => [...res.events.slice().reverse(), ...prev].slice(0, 30));
             for (const ev of res.events) {
-              if (ev.type === 'StoreImageComplete') {
+              if (ev.type === 'Jpeg' || ev.type === 'StoreImageComplete') {
                 void saveCapturedPhoto(ev);
               }
             }
