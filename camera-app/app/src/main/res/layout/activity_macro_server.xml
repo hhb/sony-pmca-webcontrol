@@ -33,19 +33,25 @@
 
         <com.sony.pmca.webcontrol.FocusScaleView
             android:id="@+id/vFocusScale"
-            android:layout_width="105dp"
+            android:layout_width="88dp"
             android:layout_height="14dp"
+            android:layout_marginLeft="6dp" />
+
+        <com.sony.pmca.webcontrol.BatteryView
+            android:id="@+id/vBattery"
+            android:layout_width="24dp"
+            android:layout_height="12dp"
             android:layout_marginLeft="6dp" />
 
         <TextView
             android:id="@+id/tvBattery"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="8dp"
+            android:layout_marginLeft="3dp"
             android:singleLine="true"
             android:text="--%"
             android:textColor="#00FF88"
-            android:textSize="13sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
     <TextView

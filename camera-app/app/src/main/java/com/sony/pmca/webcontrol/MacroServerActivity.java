@@ -63,6 +63,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private final RpcDispatcher m_rpc = new RpcDispatcher();
 
     private FocusScaleView m_focusScaleView;
+    private BatteryView m_batteryView;
     private TextView m_tvCameraStatus;
     private TextView m_tvBattery;
     private TextView m_tvWifiStatus;
@@ -114,6 +115,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         m_surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
 
         m_focusScaleView = (FocusScaleView) findViewById(R.id.vFocusScale);
+        m_batteryView = (BatteryView) findViewById(R.id.vBattery);
         m_tvCameraStatus = (TextView) findViewById(R.id.tvCameraStatus);
         m_tvBattery = (TextView) findViewById(R.id.tvBattery);
         m_tvWifiStatus = (TextView) findViewById(R.id.tvWifiStatus);
@@ -677,6 +679,9 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                if (m_batteryView != null) {
+                    m_batteryView.setPercent(pct);
+                }
                 m_tvBattery.setText(pct + "%");
                 m_tvBattery.setTextColor(color);
             }
