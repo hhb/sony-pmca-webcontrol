@@ -450,6 +450,13 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     try {
                         if (params != null) {
                             m_iso = m_camera.createParametersModifier(params).getISOSensitivity();
+                            int ec = params.getExposureCompensation();
+                            JSONObject ecObj = new JSONObject();
+                            ecObj.put("index", ec);
+                            ecObj.put("step", (double) params.getExposureCompensationStep());
+                            ecObj.put("min", params.getMinExposureCompensation());
+                            ecObj.put("max", params.getMaxExposureCompensation());
+                            m_eventHub.updateExposureCompensation(ecObj);
                         }
                     } catch (Throwable ignored) {
                     }
@@ -629,6 +636,16 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             }
             try {
                 m_iso = mod.getISOSensitivity();
+            } catch (Throwable ignored) {
+            }
+            try {
+                int ec = params.getExposureCompensation();
+                JSONObject ecObj = new JSONObject();
+                ecObj.put("index", ec);
+                ecObj.put("step", (double) params.getExposureCompensationStep());
+                ecObj.put("min", params.getMinExposureCompensation());
+                ecObj.put("max", params.getMaxExposureCompensation());
+                m_eventHub.updateExposureCompensation(ecObj);
             } catch (Throwable ignored) {
             }
         } catch (Throwable ignored) {

@@ -316,8 +316,14 @@ body {
 
 .exposure-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .exposure-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .metric-card {
@@ -329,6 +335,30 @@ body {
   flex-direction: column;
   gap: 6px;
   align-items: center;
+}
+
+.metric-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.metric-reset-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 0.68rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+.metric-reset-btn:hover {
+  background: rgba(88, 166, 255, 0.15);
+  text-decoration: underline;
 }
 
 .metric-label {

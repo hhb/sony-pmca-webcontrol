@@ -29,6 +29,7 @@ public class CameraEventHub {
     private int m_lastShutterStatus = -1;
     private boolean m_capturing = false;
     private JSONObject m_lens = new JSONObject();
+    private JSONObject m_exposureCompensation = new JSONObject();
     private String m_wifiIp = "0.0.0.0";
     private int m_httpPort = 8080;
 
@@ -84,6 +85,12 @@ public class CameraEventHub {
     public void updateAperture(JSONObject data) {
         synchronized (m_lock) {
             m_aperture = data;
+        }
+    }
+
+    public void updateExposureCompensation(JSONObject data) {
+        synchronized (m_lock) {
+            m_exposureCompensation = data != null ? data : new JSONObject();
         }
     }
 
@@ -155,6 +162,7 @@ public class CameraEventHub {
                 root.put("lastShutterStatus", m_lastShutterStatus);
                 root.put("capturing", m_capturing);
                 root.put("lens", m_lens);
+                root.put("exposureCompensation", m_exposureCompensation);
 
                 JSONObject wifi = new JSONObject();
                 wifi.put("ip", m_wifiIp);
