@@ -4,9 +4,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
@@ -22,25 +19,31 @@ import android.widget.TextView;
 import com.github.ma1co.pmcademo.app.BaseActivity;
 import com.github.ma1co.pmcademo.app.Logger;
 import com.sony.scalar.hardware.CameraEx;
+import com.sony.scalar.hardware.CameraSequence;
+import com.sony.scalar.hardware.DeviceBuffer;
+import com.sony.scalar.hardware.DeviceMemory;
 import com.sony.scalar.sysutil.ScalarProperties;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileReader;
+import java.nio.ByteBuffer;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 
 public class MacroServerActivity extends BaseActivity
-        implements SurfaceHolder.Callback, CameraEx.ShutterListener, Camera.PreviewCallback {
+        implements SurfaceHolder.Callback, CameraEx.ShutterListener {
 
     public enum State {
         idle, focusing, capturing, bracketing, error
     }
 
+    private static final int LIVEVIEW_BUF_CAPACITY = 128 * 1024;
+
     private SurfaceHolder m_surfaceHolder;
     private CameraEx m_camera;
+    private CameraSequence m_cameraSequence;
     private CameraEx.AutoPictureReviewControl m_autoReviewControl;
     private int m_pictureReviewTime;
 
@@ -54,6 +57,7 @@ public class MacroServerActivity extends BaseActivity
     private WifiManager m_wifiManager;
     private BroadcastReceiver m_networkStateReceiver;
     private MacroHttpServer m_httpServer;
+    private int m_httpPort = MacroHttpServer.DEFAULT_PORT;
     private String m_wifiIp = "0.0.0.0";
 
     private volatile State m_state = State.idle;
@@ -70,21 +74,28 @@ public class MacroServerActivity extends BaseActivity
     private int m_stuckCount = 0;
     private LinkedList<Integer> m_focusQueue = new LinkedList<Integer>();
 
-    // Preview / JPEG buffer
+    // Hardware LiveView / JPEG buffer (via Sony CameraSequence)
     private final Object m_frameLock = new Object();
-    private byte[] m_latestYuv;
+    private ByteBuffer m_liveviewByteBuf;
     private byte[] m_latestJpeg;
-    private int m_previewWidth = 0;
-    private int m_previewHeight = 0;
-    private int m_previewFormat = ImageFormat.NV21;
+    private long m_lastLiveviewFetchMs = 0;
 
     private final Runnable m_checkFocusRunnable = new Runnable() {
         @Override
         public void run() {
             if ((m_state == State.focusing || m_state == State.bracketing) && m_focusBeforeDrive == m_curFocus) {
                 m_stuckCount++;
-                if (m_stuckCount > 8) {
-                    Logger.info("Focus drive stalled at " + m_curFocus);
+                if (m_stuckCount == 2 && m_camera != null) {
+                    // Re-assert Manual Focus mode in case camera temporarily left MF state
+                    try {
+                        Camera.Parameters focusParams = m_camera.createEmptyParameters();
+                        focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
+                        m_camera.getNormalCamera().setParameters(focusParams);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                if (m_stuckCount > 12) {
+                    Logger.info("Focus drive stalled at " + m_curFocus + " (target " + m_targetFocus + ")");
                     if (m_state == State.focusing) {
                         m_state = State.idle;
                         updateStatusText();
@@ -130,8 +141,6 @@ public class MacroServerActivity extends BaseActivity
                 }
             }
         };
-
-        m_httpServer = new MacroHttpServer(this);
     }
 
     @Override
@@ -146,11 +155,7 @@ public class MacroServerActivity extends BaseActivity
             Logger.error("Wi-Fi init error: " + t.toString());
         }
 
-        try {
-            m_httpServer.start();
-        } catch (Throwable t) {
-            Logger.error("Failed to start HTTP server: " + t.toString());
-        }
+        startHttpServerWithFallback();
 
         try {
             m_camera = CameraEx.open(0, null);
@@ -181,6 +186,9 @@ public class MacroServerActivity extends BaseActivity
                     m_focusScaleView.setCurPosition(m_curFocus);
 
                     if (m_state == State.focusing) {
+                        if (m_maxFocus > 0) {
+                            m_targetFocus = Math.max(0, Math.min(m_maxFocus, m_targetFocus));
+                        }
                         if (m_curFocus == m_targetFocus) {
                             m_state = State.idle;
                         } else {
@@ -228,6 +236,24 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
+    private void startHttpServerWithFallback() {
+        // Try port 80 first; if non-root UID blocks <1024, fall back to 8080
+        int[] candidatePorts = new int[]{80, MacroHttpServer.DEFAULT_PORT};
+        for (int port : candidatePorts) {
+            try {
+                MacroHttpServer srv = new MacroHttpServer(this, port);
+                srv.start();
+                m_httpServer = srv;
+                m_httpPort = port;
+                Logger.info("HTTP server listening on port " + port);
+                return;
+            } catch (Throwable t) {
+                Logger.info("Port " + port + " unavailable (" + t.getMessage() + ")");
+            }
+        }
+        Logger.error("Failed to start HTTP server on any port");
+    }
+
     @Override
     protected void onPause() {
         super.onPause();
@@ -240,6 +266,7 @@ public class MacroServerActivity extends BaseActivity
                 m_httpServer.stop();
             } catch (Throwable ignored) {
             }
+            m_httpServer = null;
         }
 
         try {
@@ -252,12 +279,10 @@ public class MacroServerActivity extends BaseActivity
         }
         setAutoPowerOffMode(true);
 
+        stopLiveviewSequence();
+
         if (m_camera != null) {
             m_surfaceHolder.removeCallback(this);
-            try {
-                m_camera.getNormalCamera().setPreviewCallback(null);
-            } catch (Throwable ignored) {
-            }
             try {
                 m_camera.getNormalCamera().stopPreview();
             } catch (Throwable ignored) {
@@ -284,20 +309,18 @@ public class MacroServerActivity extends BaseActivity
         try {
             Camera.Parameters params = m_camera.createEmptyParameters();
             CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
-            params.setSceneMode(CameraEx.ParametersModifier.SCENE_MODE_MANUAL_EXPOSURE);
             modifier.setDriveMode(CameraEx.ParametersModifier.DRIVE_MODE_SINGLE);
+            params.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
             modifier.setSelfTimer(0);
             m_camera.getNormalCamera().setParameters(params);
         } catch (Throwable t) {
-            Logger.error("setDefaults exposure/drive warning: " + t.toString());
-        }
-
-        try {
-            Camera.Parameters focusParams = m_camera.createEmptyParameters();
-            focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
-            m_camera.getNormalCamera().setParameters(focusParams);
-        } catch (Throwable t) {
-            Logger.error("setDefaults MF warning (check lens AF/MF): " + t.toString());
+            Logger.error("setDefaults MF/drive warning: " + t.toString());
+            try {
+                Camera.Parameters focusParams = m_camera.createEmptyParameters();
+                focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
+                m_camera.getNormalCamera().setParameters(focusParams);
+            } catch (Throwable ignored) {
+            }
         }
 
         try {
@@ -353,7 +376,8 @@ public class MacroServerActivity extends BaseActivity
                 break;
             case CONNECTED:
                 m_wifiIp = info != null ? Formatter.formatIpAddress(info.getIpAddress()) : "0.0.0.0";
-                m_tvWifiStatus.setText("READY (" + ssid + "): http://" + m_wifiIp + ":" + MacroHttpServer.PORT);
+                String portSuffix = (m_httpPort == 80) ? "" : (":" + m_httpPort);
+                m_tvWifiStatus.setText("READY (" + ssid + "): http://" + m_wifiIp + portSuffix);
                 break;
             case DISCONNECTED:
                 m_wifiIp = "0.0.0.0";
@@ -389,62 +413,91 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
-    // --- Camera Preview Callback (Live View) ---
+    // --- Hardware LiveView Sequence (Sony CameraSequence API) ---
 
-    @Override
-    public void onPreviewFrame(byte[] data, Camera camera) {
-        if (data == null) {
-            return;
-        }
+    private void startLiveviewSequence() {
         synchronized (m_frameLock) {
-            if (m_latestYuv == null || m_latestYuv.length != data.length) {
-                m_latestYuv = new byte[data.length];
+            if (m_camera == null || m_cameraSequence != null) {
+                return;
             }
-            System.arraycopy(data, 0, m_latestYuv, 0, data.length);
-            if (m_previewWidth <= 0 || m_previewHeight <= 0) {
-                // Infer common NV21 dimensions if getPreviewSize() returned null
-                if (data.length == 640 * 480 * 3 / 2) {
-                    m_previewWidth = 640;
-                    m_previewHeight = 480;
-                } else if (data.length == 640 * 360 * 3 / 2) {
-                    m_previewWidth = 640;
-                    m_previewHeight = 360;
-                } else if (data.length == 1024 * 768 * 3 / 2) {
-                    m_previewWidth = 1024;
-                    m_previewHeight = 768;
+            try {
+                m_cameraSequence = CameraSequence.open(m_camera);
+                if (m_cameraSequence != null) {
+                    CameraSequence.Options opts = new CameraSequence.Options();
+                    opts.setOption("PREVIEW_FRAME_RATE", 30000);
+                    opts.setOption("PREVIEW_FRAME_WIDTH", 640);
+                    opts.setOption("PREVIEW_FRAME_HEIGHT", 0);
+                    opts.setOption("PREVIEW_FRAME_FORMAT", 256); // 256 = JPEG
+                    opts.setOption("PREVIEW_FRAME_MAX_NUM", 1);
+                    opts.setOption("JPEG_COMPRESS_RATE_DENOM", 15);
+                    opts.setOption("JPEG_COMPRESS_MAX_SIZE", 100);
+                    opts.setOption("INTERIM_PRE_REVIEW_ENABLED", true);
+                    m_cameraSequence.startPreviewSequence(opts);
+                    Logger.info("CameraSequence LiveView started (640px JPEG)");
                 }
+            } catch (Throwable t) {
+                Logger.error("startLiveviewSequence error: " + t.toString());
+                stopLiveviewSequence();
+            }
+        }
+    }
+
+    private void stopLiveviewSequence() {
+        synchronized (m_frameLock) {
+            if (m_cameraSequence != null) {
+                try {
+                    m_cameraSequence.stopPreviewSequence();
+                } catch (Throwable ignored) {
+                }
+                try {
+                    m_cameraSequence.release();
+                } catch (Throwable ignored) {
+                }
+                m_cameraSequence = null;
             }
         }
     }
 
     public byte[] getLatestLiveViewJpeg() {
-        byte[] yuvCopy = null;
-        byte[] jpegCopy = null;
-        int w;
-        int h;
-        int fmt;
         synchronized (m_frameLock) {
-            if (m_latestYuv != null && m_previewWidth > 0 && m_previewHeight > 0) {
-                yuvCopy = new byte[m_latestYuv.length];
-                System.arraycopy(m_latestYuv, 0, yuvCopy, 0, m_latestYuv.length);
-            } else if (m_latestJpeg != null) {
-                jpegCopy = m_latestJpeg;
+            long now = System.currentTimeMillis();
+            if (m_cameraSequence != null && m_state != State.capturing && (now - m_lastLiveviewFetchMs) >= 40) {
+                m_lastLiveviewFetchMs = now;
+                DeviceMemory[] frames = null;
+                try {
+                    frames = m_cameraSequence.getPreviewSequenceFrames(1);
+                    if (frames != null && frames.length > 0 && frames[0] != null) {
+                        DeviceBuffer dbuf = (DeviceBuffer) frames[0];
+                        int dataSize = dbuf.getSize();
+                        if (dataSize > 0 && dataSize <= LIVEVIEW_BUF_CAPACITY) {
+                            if (m_liveviewByteBuf == null) {
+                                m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
+                            }
+                            m_liveviewByteBuf.rewind();
+                            dbuf.read(m_liveviewByteBuf, dataSize, 0);
+                            m_liveviewByteBuf.rewind();
+                            byte[] jpeg = new byte[dataSize];
+                            m_liveviewByteBuf.get(jpeg, 0, dataSize);
+                            m_latestJpeg = jpeg;
+                        }
+                    }
+                } catch (Throwable t) {
+                    Logger.error("getPreviewSequenceFrames error: " + t.toString());
+                } finally {
+                    if (frames != null) {
+                        for (DeviceMemory dm : frames) {
+                            if (dm != null) {
+                                try {
+                                    dm.release();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            w = m_previewWidth;
-            h = m_previewHeight;
-            fmt = m_previewFormat;
+            return m_latestJpeg;
         }
-        if (yuvCopy != null) {
-            try {
-                YuvImage yuvImage = new YuvImage(yuvCopy, fmt, w, h, null);
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                yuvImage.compressToJpeg(new Rect(0, 0, w, h), 75, baos);
-                return baos.toByteArray();
-            } catch (Throwable t) {
-                Logger.error("YUV compress error: " + t.toString());
-            }
-        }
-        return jpegCopy;
     }
 
     public String getCrashLogText() {
@@ -481,24 +534,7 @@ public class MacroServerActivity extends BaseActivity
             Camera cam = m_camera.getNormalCamera();
             cam.setPreviewDisplay(holder);
             cam.startPreview();
-
-            try {
-                Camera.Parameters params = cam.getParameters();
-                if (params != null) {
-                    Camera.Size previewSize = params.getPreviewSize();
-                    if (previewSize != null) {
-                        m_previewWidth = previewSize.width;
-                        m_previewHeight = previewSize.height;
-                    }
-                    int fmt = params.getPreviewFormat();
-                    if (fmt > 0) {
-                        m_previewFormat = fmt;
-                    }
-                }
-                cam.setPreviewCallback(this);
-            } catch (Throwable t) {
-                Logger.info("Optional PreviewCallback not active: " + t.toString());
-            }
+            startLiveviewSequence();
         } catch (Throwable t) {
             Logger.error("surfaceCreated error: " + t.toString());
         }
@@ -510,6 +546,7 @@ public class MacroServerActivity extends BaseActivity
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        stopLiveviewSequence();
     }
 
     // --- Public API Methods called from MacroHttpServer ---
@@ -518,17 +555,43 @@ public class MacroServerActivity extends BaseActivity
         m_handler.post(new Runnable() {
             @Override
             public void run() {
-                if (m_camera == null || m_state == State.error) {
+                if (m_camera == null || m_state == State.error || m_state == State.bracketing) {
                     return;
                 }
-                try {
-                    int clampedSpeed = Math.max(1, Math.min(4, speed));
-                    m_camera.startOneShotFocusDrive(
-                            far ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
-                            clampedSpeed);
-                } catch (Throwable t) {
-                    Logger.error("driveFocusStep error: " + t.toString());
+                int clampedSpeed = Math.max(1, Math.min(4, speed));
+                int stepDelta;
+                if (clampedSpeed == 1) {
+                    stepDelta = 1;
+                } else if (clampedSpeed == 2) {
+                    stepDelta = 3;
+                } else if (clampedSpeed == 3) {
+                    stepDelta = 6;
+                } else {
+                    stepDelta = 12;
                 }
+
+                // Use closed-loop target position with 50ms retry because Sony's
+                // startOneShotFocusDrive frequently drops single unverified pulses.
+                int basePos = (m_state == State.focusing) ? m_targetFocus : m_curFocus;
+                int nextTarget = basePos + (far ? stepDelta : -stepDelta);
+                if (m_maxFocus > 0) {
+                    nextTarget = Math.max(0, Math.min(m_maxFocus, nextTarget));
+                } else {
+                    nextTarget = Math.max(0, nextTarget);
+                }
+
+                m_handler.removeCallbacks(m_checkFocusRunnable);
+                m_focusQueue.clear();
+                m_targetFocus = nextTarget;
+                if (m_curFocus == m_targetFocus && m_maxFocus > 0) {
+                    m_state = State.idle;
+                    updateStatusText();
+                    return;
+                }
+                m_state = State.focusing;
+                m_stuckCount = 0;
+                updateStatusText();
+                driveTowardTarget();
             }
         });
     }
@@ -540,6 +603,7 @@ public class MacroServerActivity extends BaseActivity
                 if (m_camera == null || m_state == State.error) {
                     return;
                 }
+                m_handler.removeCallbacks(m_checkFocusRunnable);
                 m_focusQueue.clear();
                 m_targetFocus = Math.max(0, Math.min(m_maxFocus > 0 ? m_maxFocus : targetPos, targetPos));
                 if (m_curFocus == m_targetFocus) {
@@ -676,10 +740,13 @@ public class MacroServerActivity extends BaseActivity
             speed = 1;
         }
         try {
+            m_handler.removeCallbacks(m_checkFocusRunnable);
             m_camera.startOneShotFocusDrive(
                     m_curFocus < target ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
                     speed);
-            m_handler.postDelayed(m_checkFocusRunnable, 60);
+            // Sony startOneShotFocusDrive does not always trigger FocusDriveListener on the first pulse;
+            // schedule a 50ms check to retry until FocusDriveListener confirms movement.
+            m_handler.postDelayed(m_checkFocusRunnable, 50);
         } catch (Throwable t) {
             Logger.error("driveTowardTarget error: " + t.toString());
             m_state = State.idle;
@@ -758,7 +825,8 @@ public class MacroServerActivity extends BaseActivity
         sb.append("\"apertureFormatted\":\"").append(m_aperture > 0 ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--").append("\",");
         sb.append("\"shutterSpeed\":\"").append(m_shutterSpeed).append("\",");
         sb.append("\"iso\":").append(m_iso).append(",");
-        sb.append("\"wifiIp\":\"").append(m_wifiIp).append("\"");
+        sb.append("\"wifiIp\":\"").append(m_wifiIp).append("\",");
+        sb.append("\"port\":").append(m_httpPort);
         sb.append("}");
         return sb.toString();
     }

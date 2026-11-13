@@ -6,12 +6,16 @@ import java.util.Map;
 import fi.iki.elonen.NanoHTTPD;
 
 public class MacroHttpServer extends NanoHTTPD {
-    public static final int PORT = 8080;
+    public static final int DEFAULT_PORT = 8080;
 
     private final MacroServerActivity m_activity;
 
     public MacroHttpServer(MacroServerActivity activity) {
-        super(PORT);
+        this(activity, DEFAULT_PORT);
+    }
+
+    public MacroHttpServer(MacroServerActivity activity, int port) {
+        super(port);
         m_activity = activity;
     }
 
@@ -140,7 +144,7 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<style>"
             + "body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:12px;text-align:center}"
             + ".wrap{max-width:760px;margin:0 auto}"
-            + "img{width:100%;max-height:440px;object-fit:contain;background:#000;border:1px solid #333;border-radius:6px}"
+            + "img{width:100%;max-height:460px;min-height:240px;object-fit:contain;background:#000;border:1px solid #333;border-radius:6px;display:block}"
             + ".card{background:#1c1c1e;border-radius:8px;padding:12px;margin-top:10px}"
             + ".row{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center;margin:8px 0}"
             + "button{background:#2c2c2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 14px;font-size:14px;cursor:pointer}"
@@ -150,15 +154,18 @@ public class MacroHttpServer extends NanoHTTPD {
             + ".stat{font-family:monospace;font-size:13px;color:#30d158}"
             + "</style></head><body><div class='wrap'>"
             + "<h3>Sony PMCA WebControl</h3>"
-            + "<img id='lv' src='/api/liveview.jpg' alt='LiveView'/>"
+            + "<img id='lv' alt='Waiting for LiveView...'/>"
             + "<div class='card'><div id='st' class='stat'>Loading...</div></div>"
             + "<div class='card'><b>Manual Focus Drive</b><div class='row'>"
-            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=4')\">&#9664;&#9664;&#9664;</button>"
-            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=2')\">&#9664;&#9664;</button>"
-            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=1')\">&#9664; Near</button>"
-            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=1')\">Far &#9654;</button>"
-            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=2')\">&#9654;&#9654;</button>"
-            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=4')\">&#9654;&#9654;&#9654;</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=4')\">&#9664;&#9664;&#9664; (-12)</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=2')\">&#9664;&#9664; (-3)</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=near&speed=1')\">&#9664; Near (-1)</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=1')\">Far (+1) &#9654;</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=2')\">(+3) &#9654;&#9654;</button>"
+            + "<button onclick=\"api('/api/focus/drive?dir=far&speed=4')\">(+12) &#9654;&#9654;&#9654;</button>"
+            + "</div><div class='row'>"
+            + "<span>Pos:</span><input id='fPos' type='number' value='0'/>"
+            + "<button onclick=\"api('/api/focus/goto?pos='+document.getElementById('fPos').value)\">Go to Pos</button>"
             + "</div><div class='row'>"
             + "<button onclick='setNear()'>Set Near</button>"
             + "<input id='bMin' type='number' value='0'/>"
@@ -174,23 +181,30 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<button onclick=\"api('/api/exposure?aperture=inc')\">F +</button>"
             + "<button onclick=\"api('/api/exposure?shutter=dec')\">Shutter -</button>"
             + "<button onclick=\"api('/api/exposure?shutter=inc')\">Shutter +</button>"
+            + "<button onclick=\"api('/api/exposure?iso=0')\">ISO AUTO</button>"
             + "<button onclick=\"api('/api/exposure?iso=100')\">ISO 100</button>"
             + "<button onclick=\"api('/api/exposure?iso=400')\">ISO 400</button>"
+            + "<button onclick=\"api('/api/exposure?iso=1600')\">ISO 1600</button>"
             + "<button class='pri' onclick=\"api('/api/capture')\">Capture</button>"
             + "</div></div></div>"
             + "<script>"
-            + "var curFocus=0;"
+            + "var curFocus=0,lv=document.getElementById('lv'),prevUrl=null;"
             + "function api(u){fetch(u,{method:'POST'}).catch(console.error);}"
             + "function setNear(){document.getElementById('bMin').value=curFocus;}"
             + "function setFar(){document.getElementById('bMax').value=curFocus;}"
             + "function startStack(){"
             + "var a=document.getElementById('bMin').value,b=document.getElementById('bMax').value,c=document.getElementById('bShots').value;"
             + "api('/api/bracket?min='+a+'&max='+b+'&shots='+c);}"
-            + "setInterval(function(){document.getElementById('lv').src='/api/liveview.jpg?t='+Date.now();},180);"
+            + "function pullLv(){"
+            + "fetch('/api/liveview.jpg?t='+Date.now()).then(function(r){if(!r.ok)throw new Error();return r.blob();})"
+            + ".then(function(b){var u=URL.createObjectURL(b);lv.src=u;if(prevUrl)URL.revokeObjectURL(prevUrl);prevUrl=u;setTimeout(pullLv,90);})"
+            + ".catch(function(){setTimeout(pullLv,400);});}"
+            + "pullLv();"
             + "setInterval(function(){fetch('/api/status').then(r=>r.json()).then(d=>{"
             + "curFocus=d.currentFocus;"
+            + "var isoStr=d.iso===0?'AUTO':d.iso;"
             + "document.getElementById('st').innerText="
-            + "'State: '+d.state+' | Focus: '+d.currentFocus+'/'+d.maxFocus+' | '+d.apertureFormatted+' | '+d.shutterSpeed+' | ISO '+d.iso+' | Left: '+d.remainingShots;"
+            + "'State: '+d.state+' | Focus: '+d.currentFocus+'/'+d.maxFocus+' | '+d.apertureFormatted+' | '+d.shutterSpeed+' | ISO '+isoStr+' | Left: '+d.remainingShots;"
             + "}).catch(()=>{});},350);"
             + "</script></body></html>";
 }
