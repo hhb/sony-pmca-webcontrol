@@ -264,6 +264,7 @@ export function FocusControl({
         </div>
 
         <div className="stack-actions">
+          {stackStatus && <span className="muted-tag" style={{ marginRight: 'auto' }}>{stackStatus}</span>}
           {!abortRef.current ? (
             <button
               type="button"
@@ -282,7 +283,6 @@ export function FocusControl({
               Abort Stack
             </button>
           )}
-          {stackStatus && <span className="muted-tag">{stackStatus}</span>}
         </div>
       </div>
     </section>
