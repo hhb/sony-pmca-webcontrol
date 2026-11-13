@@ -61,6 +61,8 @@ This guide covers camera compatibility, flashing the `.apk` to your Sony camera,
 
 ## 4. Using the Web Control UI
 
+![Sony PMCA WebControl Web UI](./screenshot.jpg)
+
 You can control the camera in two ways:
 
 ### Option A: Full React Web Client (`web-client/`)

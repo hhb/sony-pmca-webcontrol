@@ -2,6 +2,8 @@
 
 An open-source **Sony Imaging Edge alternative** and **Wi-Fi tethering** solution for PlayMemories-capable Sony Alpha / Cyber-shot cameras (such as **a6000, a6300, a6500, a5100, a7 II, a7R II, a7S II, RX100 III–V, RX10 II–III**). Unlike Sony's official app, it joins your home Wi-Fi LAN directly without disconnecting from the internet and adds **MJPEG Live View, device-side event-driven closed-loop Focus/Exposure/Zoom control, automated Focus Bracketing / Focus Stacking, and a reflective HTTP JSON-RPC API**.
 
+![Sony PMCA WebControl Web UI](./docs/screenshot.jpg)
+
 ## Quick Start (Prebuilt Releases)
 
 You don't need Android Studio or Node.js to try it out:

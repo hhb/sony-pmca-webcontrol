@@ -11,5 +11,8 @@ tools/
 *.jpg
 *.jpeg
 *.ARW
+!docs/*.jpg
+!docs/*.jpeg
+!docs/*.png
 node_modules/
 dist/
