@@ -1,4 +1,4 @@
-"""Python client SDK for Sony a6000 AI Macro HTTP Server."""
+"""Python client SDK for Sony PMCA WebControl HTTP Server."""
 
 import json
 import time
@@ -7,8 +7,8 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 
-class A6000MacroClient:
-    """HTTP client to control a Sony a6000 running the AI Macro Server APK."""
+class SonyPmcaClient:
+    """HTTP client to control a Sony PlayMemories camera running the PMCA WebControl APK."""
 
     def __init__(self, host: str, port: int = 8080, timeout: float = 5.0) -> None:
         self.base_url = f"http://{host}:{port}"
@@ -100,3 +100,6 @@ class A6000MacroClient:
                 raise RuntimeError(f"Camera entered error state: {st}")
             time.sleep(poll_interval)
         raise TimeoutError(f"Timed out waiting for camera idle after {timeout}s")
+
+
+A6000MacroClient = SonyPmcaClient

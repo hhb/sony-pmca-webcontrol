@@ -6,7 +6,8 @@ local.properties
 __pycache__/
 *.pyc
 .venv/
+tools/
+*.apk
 *.jpg
 *.jpeg
 *.ARW
-tools/

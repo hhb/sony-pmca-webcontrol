@@ -1,4 +1,4 @@
-"""Example AI / automated mineral macro workflow using A6000MacroClient.
+"""Example automated focus-stacking workflow using SonyPmcaClient.
 
 Demonstrates:
 1. Checking highlight clipping on live-view frames and adjusting shutter speed.
@@ -13,7 +13,7 @@ from typing import Tuple
 import cv2
 import numpy as np
 
-from a6000_client import A6000MacroClient
+from pmca_client import SonyPmcaClient
 
 
 def analyze_frame(jpeg_bytes: bytes) -> Tuple[float, float]:
@@ -27,7 +27,7 @@ def analyze_frame(jpeg_bytes: bytes) -> Tuple[float, float]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Automated mineral macro stacking workflow")
+    parser = argparse.ArgumentParser(description="Automated focus-stacking workflow")
     parser.add_argument("--host", required=True, help="Camera IP address (e.g. 192.168.1.105)")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--min-focus", type=int, default=None, help="Optional manual start focus")
@@ -35,11 +35,11 @@ def main() -> None:
     parser.add_argument("--shots", type=int, default=20, help="Number of focus bracket shots")
     args = parser.parse_args()
 
-    cam = A6000MacroClient(args.host, args.port)
+    cam = SonyPmcaClient(args.host, args.port)
     status = cam.get_status()
     print("Initial camera status:", status)
 
-    # Step 1: Check exposure for specular mineral highlights
+    # Step 1: Check exposure for specular highlights
     for _ in range(4):
         frame = cam.get_liveview_jpeg()
         sharpness, clipped = analyze_frame(frame)

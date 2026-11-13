@@ -1,15 +1,15 @@
-# Sony a6000 AI Macro System — Architecture & Design (`DESIGN.md`)
+# Sony PMCA WebControl — Architecture & Design (`DESIGN.md`)
 
 ## 1. Background & Stock Firmware Limitations
 
-The stock Sony a6000 (`ILCE-6000`) firmware imposes three major limitations for macro photography and automated AI workflows:
-1. **No Live View or Focus Drive over USB (`PC Remote`)**: Connecting the a6000 to Sony `Imaging Edge Desktop` via USB only allows blind shutter triggering and exposure changes. It does not stream a Live View feed or expose manual focus (MF) stepping controls.
+Sony's 2014–2017 PlayMemories-era mirrorless cameras (such as the `ILCE-6000` / a6000, a6300, a6500, and a7 II series) impose three major firmware limitations for tethered studio control, macro photography, and automated workflows:
+1. **No Live View or Focus Drive over USB (`PC Remote`)**: Connecting these bodies to Sony `Imaging Edge Desktop` via USB only allows blind shutter triggering and exposure changes. It does not stream a Live View feed or expose manual focus (MF) stepping controls.
 2. **No Remote MF Stepping over Wi-Fi (`Smart Remote Control`)**: Sony's official Wi-Fi JSON-RPC API only exposes `Touch AF` (autofocus at coordinates) and omits fine-grained manual focus drive commands. It also forces the host computer/tablet to join the camera's isolated Wi-Fi access point.
-3. **No Native Focus Bracketing**: Shooting 1–5 cm mineral specimens requires stacking dozens of shots due to razor-thin depth of field, which the stock a6000 firmware cannot automate.
+3. **No Native Focus Bracketing**: Shooting macro subjects (such as 1–5 cm mineral specimens) requires stacking dozens of shots due to razor-thin depth of field, which stock firmware on these bodies cannot automate.
 
 ## 2. Core Mechanism: In-Camera Android Subsystem & `CameraEx`
 
-Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** subsystem that hosts PlayMemories Camera Apps. By leveraging the open-source [OpenMemories-Framework](https://github.com/ma1co/OpenMemories-Framework) and [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) toolchain, we can run a custom Android `.apk` directly inside the camera and invoke Sony's undocumented hardware layer (`com.sony.scalar.hardware.CameraEx`):
+Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (API Level 10)** subsystem. By leveraging the open-source [OpenMemories-Framework](https://github.com/ma1co/OpenMemories-Framework) and [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) toolchain, we can run a custom Android `.apk` directly inside the camera and invoke Sony's undocumented hardware layer (`com.sony.scalar.hardware.CameraEx`):
 
 * **Motorized Focus Stepping**: `CameraEx.startOneShotFocusDrive(direction, speed)` drives the lens focus motor in `NEAR` or `FAR` directions across 4 speed levels (`1..4`).
 * **Absolute Focus Scale Readback**: `CameraEx.FocusDriveListener` reports `FocusPosition(currentPosition, maxPosition)`, enabling closed-loop positioning to any integer focus coordinate.
@@ -21,7 +21,7 @@ Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** sub
 
 ```text
 +-------------------------------------------------------------------+
-|                   Sony a6000 (Android 2.3 / API 10)               |
+|            Sony PMCA Camera (Android 2.3 / API 10)                |
 |                                                                   |
 |  +-----------------------+      +------------------------------+  |
 |  |  MacroServerActivity  |<---->|  com.sony.scalar.CameraEx    |  |
@@ -46,9 +46,9 @@ Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** sub
                |  Local Wi-Fi Network (HTTP / JSON / JPEG)
                v
 +-------------------------------------------------------------------+
-|          Controller: Mac / iPad Browser  or  AI Agent (Python)    |
-|  - client/a6000_client.py      (Zero-dependency Python HTTP SDK)  |
-|  - client/example_ai_macro.py  (Highlight check + sweep + stack)  |
+|       Controller: Mac / iPad Browser  or  Python / AI Agent       |
+|  - client/pmca_client.py         (Zero-dependency HTTP SDK)       |
+|  - client/example_macro_stack.py (Highlight check + sweep + stack)|
 +-------------------------------------------------------------------+
 ```
 
@@ -66,7 +66,10 @@ Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** sub
 * Upon receiving `POST /api/bracket?min=A&max=B&shots=N`, the activity interpolates `N` deduplicated integer focus coordinates between `min` and `max` into `m_focusQueue`.
 * Execution loop: `driveTowardTarget()` moves to the head of `m_focusQueue` → triggers `burstableTakePicture()` → `onShutter()` callback confirms capture completion → `cancelTakePicture()` releases the shutter lock and pops the queue → advances to the next focus target until `m_focusQueue` is empty.
 
-## 5. Hardware & Operational Constraints
-1. **AF Lens Requirement**: Software focus control relies on electronic commands sent to the lens focus motor. **An E-mount lens with electronic contacts and an AF motor is required** (including standard AF lenses mounted on electronic AF macro extension tubes). Purely mechanical manual lenses (e.g., Laowa 65mm 2X) cannot be focused electronically, though live view, exposure adjustments, and shutter release still work.
-2. **Power Management**: The app calls `setAutoPowerOffMode(false)` while active so the camera never sleeps mid-session. Using an NP-FW50 USB dummy battery is recommended for long studio sessions.
-3. **Storage Workflow**: Because 24MP RAW (`.ARW`) files are ~24MB each and the a6000 uses 2.4GHz Wi-Fi, bracketed sequences are written directly to the internal SD card at full speed for later stacking in Helicon Focus or Zerene Stacker.
+## 5. System & Hardware Requirements
+1. **Supported Camera Bodies**:
+   * **Full Support** (`ScalarProperties.PROP_VERSION_PLATFORM >= 2.3`): `a5100`, `a6000`, `a6300`, `a6500`, `a7 II`, `a7R II`, `a7S II`, `a7` / `a7R` / `a7S` (updated firmware), `RX100 III / IV / V`, `RX10 II / III`, `RX1R II`.
+   * **Partial Support** (`PROP_VERSION_PLATFORM < 2.3`): `NEX-5R`, `NEX-5T`, `NEX-6`, `RX100 II` (Live View, exposure, and capture work; motorized focus drive is unavailable in firmware).
+2. **AF Lens Requirement**: Software focus control relies on electronic commands sent to the lens focus motor. **An E-mount lens with electronic contacts and an AF motor is required** (including standard AF lenses mounted on electronic AF macro extension tubes). Purely mechanical manual lenses (e.g., Laowa 65mm 2X) cannot be focused electronically, though live view, exposure adjustments, and shutter release still work.
+3. **Power Management**: The app calls `setAutoPowerOffMode(false)` while active so the camera never sleeps mid-session. Using an NP-FW50 USB dummy battery is recommended for long studio sessions.
+4. **Storage Workflow**: Because 24MP RAW (`.ARW`) files are ~24MB each and PlayMemories cameras use 2.4GHz Wi-Fi, bracketed sequences are written directly to the internal SD card at full speed for later stacking in Helicon Focus or Zerene Stacker.

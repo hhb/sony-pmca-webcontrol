@@ -1,4 +1,4 @@
-name: Build Sony a6000 AI Macro APK
+name: Build Sony PMCA WebControl APK
 
 on:
   push:
@@ -33,5 +33,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: a6000-ai-macro-apk
+          name: sony-pmca-webcontrol-apk
           path: camera-app/app/build/outputs/apk/*.apk

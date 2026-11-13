@@ -27,7 +27,7 @@ android {
 
 android.applicationVariants.all { variant ->
     variant.outputs.each { output ->
-        def apkName = "a6000-ai-macro-${output.baseName}-${variant.versionName}.apk"
+        def apkName = "sony-pmca-webcontrol-${output.baseName}-${variant.versionName}.apk"
         output.outputFile = new File(output.outputFile.parent, apkName)
     }
 }

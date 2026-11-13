@@ -1,46 +1,52 @@
-# Sony a6000 AI Macro System — Usage & Agent Guide (`USAGE.md`)
+# Sony PMCA WebControl — Usage & API Guide (`USAGE.md`)
 
-This document instructs **human operators** and **AI Agents** on building and installing the in-camera APK, connecting the Sony a6000 to Wi-Fi, and controlling the camera via a web browser, HTTP REST API, or Python SDK for macro photography and automated focus stacking.
+This document instructs **human operators** and **AI Agents** on building and installing the in-camera APK, connecting a compatible Sony PlayMemories camera to Wi-Fi, and controlling the camera via a web browser, HTTP REST API, or Python SDK.
 
 ---
 
-## Part 1: Setup & Installation (One-Time Human Setup)
+## Part 1: Requirements & Installation (One-Time Setup)
 
-### 1. Prerequisites
-* **Camera**: Sony a6000 (`ILCE-6000`).
-* **Lens**: **An E-mount lens with electronic contacts and an autofocus (AF) motor** is required for remote focus stepping and focus bracketing (e.g., a native AF macro lens, or any Sony AF lens paired with electronic AF macro extension tubes).
-* **Saved Wi-Fi Network**: Connect the a6000 to your home/studio Wi-Fi router at least once in the stock camera settings so the SSID and password are saved in the camera's configuration.
+### 1. Hardware & Software Requirements
+* **Camera**: Any PlayMemories-compatible Sony camera with Scalar Platform $\ge 2.3$:
+  * **APS-C**: `a5100`, `a6000`, `a6300`, `a6500`
+  * **Full-Frame**: `a7 II`, `a7R II`, `a7S II` (plus `a7` / `a7R` / `a7S` on latest firmware)
+  * **Cyber-shot**: `RX100 III / IV / V`, `RX10 II / III`, `RX1R II`
+* **Lens**: **An E-mount lens with electronic contacts and an autofocus (AF) motor** is required for remote focus stepping and focus bracketing (e.g., a native AF macro lens, any Sony AF lens paired with electronic AF macro extension tubes, or built-in motorized lenses on RX cameras).
+* **Saved Wi-Fi Network**: Connect the camera to your home/studio Wi-Fi router at least once in the stock camera settings (`Wireless` → `Access Point Set.`) so the SSID and password are saved in the camera's configuration.
+* **Host Environment**:
+  * Python 3.9+ inside a virtual environment (`.venv`).
+  * For compilation: JDK 8 (`OpenJDK 8`) and Android SDK (`platforms;android-10`, `build-tools;25.0.2`), or GitHub Actions.
+  * For flashing: Linux (recommended) or Windows with [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE).
 
 ### 2. Building the APK
-A GitHub Actions workflow (`.github/workflows/build.yml`) is included. Pushing this repository to GitHub automatically builds `a6000-ai-macro-debug-1.0.0.apk` as a downloadable workflow artifact.
+A GitHub Actions workflow (`.github/workflows/build.yml`) is included. Pushing this repository to GitHub automatically builds `sony-pmca-webcontrol-debug-1.0.0.apk` as a downloadable workflow artifact.
 
-To build locally (requires JDK 8 and Android SDK `platforms;android-10` + `build-tools;25.0.2`):
+To build locally:
 ```bash
 cd camera-app
 ./gradlew assembleDebug
-# Output APK: camera-app/app/build/outputs/apk/
+# Output APK: camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
 ```
 
-### 3. Flashing the APK to the Sony a6000
+### 3. Flashing the APK to the Camera
 Flashing works best on **Linux** (via native `libusb`, no custom drivers needed) or **Windows** (using the prebuilt GUI/CLI release).
 
 * **Official Tool (`pmca-console` / `pmca-gui`)**: [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (Prebuilt binaries: [Releases](https://github.com/ma1co/Sony-PMCA-RE/releases))
 * **Community Rust Alternative**: [masterflai/pmca-re-reloaded](https://github.com/masterflai/pmca-re-reloaded)
 
-Steps to flash on Linux:
-1. On the camera menu: `Setup` → `USB Connection` → set to **`MTP`**.
-2. Connect the camera to your computer via a data-capable Micro-USB cable and run `pmca-console`:
+Steps to flash on Linux using a Python `venv`:
+1. On the camera menu: `Setup` → `USB Connection` → set to **`Mass Storage`** or **`MTP`**.
+2. Connect the camera to your computer via a data-capable Micro-USB cable and run:
    ```bash
-   git clone https://github.com/ma1co/Sony-PMCA-RE.git
-   cd Sony-PMCA-RE
-   pip install -r requirements.txt
-   sudo ./pmca-console.py install -f /path/to/a6000-ai-macro-debug-1.0.0.apk
+   python3 -m venv .venv
+   ./.venv/bin/pip install -r tools/Sony-PMCA-RE/requirements.txt
+   sudo ./.venv/bin/python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
    ```
-3. Unplug the USB cable. Open the camera's `Application List` to find **`AI Macro Server`**.
+3. Unplug the USB cable. Open the camera's `Application List` to find **`PMCA WebControl`**.
 
 ### 4. Starting the In-Camera Server
 1. Set the physical mode dial on the camera to **`M` (Manual Exposure)**.
-2. Launch **`AI Macro Server`** from the camera's `Application List`.
+2. Launch **`PMCA WebControl`** from the camera's `Application List`.
 3. Within a few seconds, the top bar on the camera LCD will display:
    `READY (<SSID>): http://192.168.x.x:8080`
    Note this IP address (e.g., `192.168.1.105`).
@@ -53,14 +59,14 @@ Open `http://<camera-ip>:8080` in Safari or Chrome on any device on the same Wi-
 * **Live View**: Streams live preview frames automatically every ~180ms.
 * **Manual Focus Stepping**: Use `◀◀◀`, `◀◀`, `◀ Near` (focus closer) or `Far ▶`, `▶▶`, `▶▶▶` (focus farther).
 * **Automated Focus Stacking**:
-  1. Step the focus to the closest tip of the mineral specimen and click **`Set Near`**.
-  2. Step the focus to the farthest edge of the specimen and click **`Set Far`**.
+  1. Step the focus to the closest tip of the subject and click **`Set Near`**.
+  2. Step the focus to the farthest edge of the subject and click **`Set Far`**.
   3. Enter the number of `Shots` (e.g., `20`) and click **`Start Stack`**.
 * **Exposure & Single Shot**: Adjust `F -` / `F +`, `Shutter -` / `Shutter +`, `ISO 100` / `ISO 400`, or click **`Capture`**.
 
 ---
 
-## Part 3: HTTP REST API Reference (For AI Agents & Scripts)
+## Part 3: HTTP REST API Reference (For Scripts & AI Agents)
 
 Base URL: `http://<camera-ip>:8080` (CORS enabled on all endpoints).
 
@@ -89,7 +95,7 @@ Base URL: `http://<camera-ip>:8080` (CORS enabled on all endpoints).
 
 ### 2. Fetch Live View Frame
 * **`GET /api/liveview.jpg`**
-* **Response**: `image/jpeg` binary frame (returns HTTP `503` if the preview pipeline has not produced its first frame yet).
+* **Response**: `image/jpeg` binary frame (returns HTTP `500` if the preview pipeline has not produced its first frame yet).
 
 ### 3. Single-Step Manual Focus Drive
 * **`POST /api/focus/drive?dir=<near|far>&speed=<1..4>`**
@@ -126,14 +132,14 @@ Base URL: `http://<camera-ip>:8080` (CORS enabled on all endpoints).
 
 ---
 
-## Part 4: Python SDK & AI Agent Standard Operating Procedure (SOP)
+## Part 4: Python SDK & Automation / AI Agent SOP
 
-The zero-dependency Python client is located at `client/a6000_client.py` (`A6000MacroClient`):
+The zero-dependency Python client is located at `client/pmca_client.py` (`SonyPmcaClient`):
 
 ```python
-from client.a6000_client import A6000MacroClient
+from client.pmca_client import SonyPmcaClient
 
-cam = A6000MacroClient("192.168.1.105")
+cam = SonyPmcaClient("192.168.1.105")
 
 # 1. Inspect status and capture a live preview frame
 status = cam.get_status()
@@ -149,10 +155,10 @@ cam.goto_focus(60, wait=True)
 cam.start_bracket(min_pos=50, max_pos=140, shots=25, wait=True)
 ```
 
-### AI Agent SOP for Mineral Macro Photography
-When an AI Agent is tasked with photographing a mineral specimen using this repository:
+### Automation / AI Agent SOP for Macro Focus Stacking
+When an automated script or AI Agent is tasked with photographing a macro subject using this repository:
 1. **Verify Readiness**: Call `get_status()`. Confirm `state == "idle"` and `maxFocus > 0`. (If `maxFocus == 0`, inform the user that an AF-capable lens or electronic extension tube must be attached).
 2. **Optimize Exposure**: Fetch a preview frame via `get_liveview_jpeg()` or `save_liveview()`. Check for specular highlight clipping on crystal faces. If highlights are clipped, step the shutter faster (`set_exposure(shutter="inc")`) or lower ISO to `100` until highlights are preserved.
-3. **Locate Focus Boundaries**: Sweep focus across the specimen using `goto_focus()` or `drive_focus()`, evaluating frame sharpness (via Laplacian variance as shown in `client/example_ai_macro.py` or via vision model inspection) to identify the front-most crystal tip (`min_pos`) and back-most edge (`max_pos`).
+3. **Locate Focus Boundaries**: Sweep focus across the subject using `goto_focus()` or `drive_focus()`, evaluating frame sharpness (via Laplacian variance as shown in `client/example_macro_stack.py` or via vision model inspection) to identify the front-most point (`min_pos`) and back-most edge (`max_pos`).
 4. **Execute Focus Stack**: Call `start_bracket(min_pos, max_pos, shots=N, wait=True)` and monitor until completion.
 5. **Post-Processing Hand-off**: Notify the user that the bracketed RAW/JPEG sequence has been recorded on the camera's SD card and is ready for stacking in Helicon Focus or Zerene Stacker.

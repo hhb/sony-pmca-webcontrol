@@ -132,7 +132,7 @@ public class MacroHttpServer extends NanoHTTPD {
     private static final String WEB_UI_HTML =
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
             + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            + "<title>Sony a6000 AI Macro</title>"
+            + "<title>Sony PMCA WebControl</title>"
             + "<style>"
             + "body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:12px;text-align:center}"
             + ".wrap{max-width:760px;margin:0 auto}"
@@ -145,7 +145,7 @@ public class MacroHttpServer extends NanoHTTPD {
             + "input{background:#2c2c2e;color:#fff;border:1px solid #444;border-radius:6px;padding:6px;width:68px;text-align:center}"
             + ".stat{font-family:monospace;font-size:13px;color:#30d158}"
             + "</style></head><body><div class='wrap'>"
-            + "<h3>Sony a6000 AI Macro Control</h3>"
+            + "<h3>Sony PMCA WebControl</h3>"
             + "<img id='lv' src='/api/liveview.jpg' alt='LiveView'/>"
             + "<div class='card'><div id='st' class='stat'>Loading...</div></div>"
             + "<div class='card'><b>Manual Focus Drive</b><div class='row'>"
