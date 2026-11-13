@@ -5,6 +5,13 @@ import {
   type CameraState,
   getDefaultCameraUrl,
 } from './api/cameraClient';
+import {
+  isDirectoryPickerSupported,
+  pickSaveDirectory,
+  saveBlobToDirectory,
+  triggerBrowserDownload,
+} from './api/localSave';
+import { AutoSavePanel } from './components/AutoSavePanel';
 import { ExposureControl } from './components/ExposureControl';
 import { FocusControl } from './components/FocusControl';
 import { LiveViewPanel } from './components/LiveViewPanel';
@@ -24,7 +31,16 @@ export function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>('control');
 
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);
+  const [saveDirName, setSaveDirName] = useState<string | null>(null);
+  const [savedCount, setSavedCount] = useState<number>(0);
+  const [lastSavedFile, setLastSavedFile] = useState<string | null>(null);
+  const [savingStatus, setSavingStatus] = useState<string | null>(null);
+
   const seqRef = useRef<number>(0);
+  const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const autoSaveRef = useRef<boolean>(false);
+  autoSaveRef.current = autoSaveEnabled;
 
   const refreshState = useCallback(async () => {
     try {
@@ -38,6 +54,65 @@ export function App() {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     }
   }, [client]);
+
+  const handlePickDirectory = useCallback(async () => {
+    try {
+      const handle = await pickSaveDirectory();
+      dirHandleRef.current = handle;
+      setSaveDirName(handle.name);
+      setAutoSaveEnabled(true);
+      setErrorMsg(null);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const saveCapturedPhoto = useCallback(
+    async (ev: CameraEvent) => {
+      if (!autoSaveRef.current) return;
+      const dirName = typeof ev.data?.DirectoryName === 'string' ? ev.data.DirectoryName : '';
+      const rawFileName = typeof ev.data?.FileName === 'string' ? ev.data.FileName : '';
+      const baseName = rawFileName.replace(/\.[^.]+$/, '');
+
+      setSavingStatus('Downloading captured photo...');
+      try {
+        const targets: Array<{ name: string; url: string }> = [];
+        if (dirName && baseName) {
+          const listing = await client.listPhotos(dirName, 100);
+          for (const p of listing.photos ?? []) {
+            if (p.name.startsWith(baseName)) {
+              targets.push({ name: p.name, url: client.photoDownloadUrl(p.path) });
+            }
+          }
+        }
+        if (targets.length === 0) {
+          targets.push({
+            name: rawFileName || `capture_${Date.now()}.jpg`,
+            url: client.latestPhotoUrl(Date.now()),
+          });
+        }
+
+        for (const t of targets) {
+          const res = await fetch(t.url);
+          if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+          const blob = await res.blob();
+          if (dirHandleRef.current) {
+            await saveBlobToDirectory(dirHandleRef.current, t.name, blob);
+          } else {
+            triggerBrowserDownload(t.name, blob);
+          }
+          setSavedCount((c) => c + 1);
+          setLastSavedFile(t.name);
+        }
+        setSavingStatus(null);
+      } catch (err) {
+        setSavingStatus(null);
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [client],
+  );
 
   // Initial state fetch + long-polling /api/events
   useEffect(() => {
@@ -56,6 +131,11 @@ export function App() {
           }
           if (res.events && res.events.length > 0) {
             setEvents((prev) => [...res.events.slice().reverse(), ...prev].slice(0, 30));
+            for (const ev of res.events) {
+              if (ev.type === 'StoreImageComplete') {
+                void saveCapturedPhoto(ev);
+              }
+            }
             const s = await client.getState();
             if (!cancelled) setState(s);
           }
@@ -75,7 +155,7 @@ export function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [client, refreshState]);
+  }, [client, refreshState, saveCapturedPhoto]);
 
   const handleConnectSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -185,6 +265,21 @@ export function App() {
                 connected={connected}
                 onRefresh={refreshState}
                 onError={setErrorMsg}
+              />
+              <AutoSavePanel
+                enabled={autoSaveEnabled}
+                onToggle={(next) => {
+                  if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
+                    void handlePickDirectory();
+                  } else {
+                    setAutoSaveEnabled(next);
+                  }
+                }}
+                dirName={saveDirName}
+                onPickDirectory={() => void handlePickDirectory()}
+                savedCount={savedCount}
+                lastSavedFile={lastSavedFile}
+                savingStatus={savingStatus}
               />
               {events.length > 0 && (
                 <section className="panel">

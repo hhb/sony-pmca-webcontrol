@@ -612,3 +612,17 @@ body {
 .event-type {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.autosave-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.autosave-status {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

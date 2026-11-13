@@ -118,15 +118,21 @@ export interface PhotosResponse {
 const STORAGE_KEY = 'pmca_camera_base_url';
 
 export function getDefaultCameraUrl(): string {
+  const isHttpsPage =
+    typeof window !== 'undefined' && window.location.protocol === 'https:';
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return saved;
+    if (saved) {
+      if (!(isHttpsPage && saved.startsWith('http://'))) {
+        return saved;
+      }
+    }
   } catch {
     // ignore storage errors
   }
   if (
     typeof window !== 'undefined' &&
-    window.location.port === '8080' &&
+    (isHttpsPage || window.location.port === '8080') &&
     window.location.protocol.startsWith('http')
   ) {
     return window.location.origin;
