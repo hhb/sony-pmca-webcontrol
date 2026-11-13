@@ -1,6 +1,13 @@
 # Sony PMCA WebControl (`sony-pmca-webcontrol`)
 
-Turn any PlayMemories-capable Sony Alpha / Cyber-shot camera (such as **a6000, a6300, a6500, a5100, a7 II, a7R II, a7S II, RX100 III–V, RX10 II–III**) into a network-connected workstation with **Wi-Fi LAN MJPEG Live View, device-side event-driven closed-loop Focus/Exposure/Zoom control, automated Focus Bracketing, and a reflective HTTP JSON-RPC API**.
+An open-source **Sony Imaging Edge alternative** and **Wi-Fi tethering** solution for PlayMemories-capable Sony Alpha / Cyber-shot cameras (such as **a6000, a6300, a6500, a5100, a7 II, a7R II, a7S II, RX100 III–V, RX10 II–III**). Unlike Sony's official app, it joins your home Wi-Fi LAN directly without disconnecting from the internet and adds **MJPEG Live View, device-side event-driven closed-loop Focus/Exposure/Zoom control, automated Focus Bracketing / Focus Stacking, and a reflective HTTP JSON-RPC API**.
+
+## Quick Start (Prebuilt Releases)
+
+You don't need Android Studio or Node.js to try it out:
+1. Download the prebuilt `sony-pmca-webcontrol-debug-1.0.0.apk` (and optionally the single-file `index.html`) from **GitHub Releases** or the latest **GitHub Actions** run artifacts.
+2. Flash the `.apk` to your camera via USB using [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) (see [USAGE.md](./USAGE.md) for step-by-step instructions).
+3. Launch **Sony PMCA WebControl** in your camera's *Application* menu and open the displayed IP in your browser (or run `web-client/` for the full React UI with Focus Peaking, Focus Loupe, Focus Stacking, and auto-save).
 
 ## Key Features
 
@@ -39,3 +46,8 @@ Turn any PlayMemories-capable Sony Alpha / Cyber-shot camera (such as **a6000, a
 
 * `camera-app/` — Android 2.3 (API 10) in-camera APK source built on `OpenMemories-Framework` and `NanoHTTPD`
 * `web-client/` — React + TypeScript + Vite web control UI and `CameraClient` SDK (`src/api/cameraClient.ts`)
+* `.github/workflows/build.yml` — GitHub Actions CI that builds both the camera `.apk` and single-file `web-client/dist/index.html` (and publishes GitHub Releases on `v*` tags)
+
+## License
+
+[MIT](./LICENSE)
