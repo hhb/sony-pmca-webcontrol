@@ -30,7 +30,13 @@
 <div class="wrap">
   <div class="top">
     <h2>Sony PMCA WebControl</h2>
-    <span class="pill" id="connState">connecting...</span>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select id="lvMode" onchange="setLvMode(this.value)" style="padding:3px 7px;font-size:12px;">
+        <option value="mjpeg" selected>LiveView: MJPEG</option>
+        <option value="jpg">LiveView: JPG</option>
+      </select>
+      <span class="pill" id="connState">connecting...</span>
+    </div>
   </div>
 
   <div class="live"><img id="lv" alt="LiveView"></div>
@@ -255,13 +261,38 @@ async function eventLoop() {
   }
 }
 
+let lvMode = 'mjpeg';
+let lvTimer = null;
+
+function setLvMode(mode) {
+  lvMode = mode === 'jpg' ? 'jpg' : 'mjpeg';
+  startLiveView();
+}
+
 function startLiveView() {
   const img = document.getElementById('lv');
+  if (lvTimer) {
+    clearTimeout(lvTimer);
+    lvTimer = null;
+  }
+  img.onload = null;
+  img.onerror = null;
+
+  if (lvMode === 'mjpeg') {
+    img.src = '/api/liveview.mjpeg?t=' + Date.now();
+    return;
+  }
+
   function nextFrame() {
+    if (lvMode !== 'jpg') return;
     img.src = '/api/liveview.jpg?t=' + Date.now();
   }
-  img.onload = () => setTimeout(nextFrame, 50);
-  img.onerror = () => setTimeout(nextFrame, 500);
+  img.onload = () => {
+    if (lvMode === 'jpg') lvTimer = setTimeout(nextFrame, 50);
+  };
+  img.onerror = () => {
+    if (lvMode === 'jpg') lvTimer = setTimeout(nextFrame, 500);
+  };
   nextFrame();
 }
 
