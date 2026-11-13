@@ -252,6 +252,10 @@ export class CameraClient {
     return `${this.baseUrl}/api/liveview.jpg?t=${ts}`;
   }
 
+  liveViewMjpegUrl(): string {
+    return `${this.baseUrl}/api/liveview.mjpeg`;
+  }
+
   latestPhotoUrl(ts = Date.now()): string {
     return `${this.baseUrl}/api/photos/latest?t=${ts}`;
   }

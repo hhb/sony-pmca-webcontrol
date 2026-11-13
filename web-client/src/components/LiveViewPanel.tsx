@@ -21,7 +21,7 @@ export function LiveViewPanel({
   const [streaming, setStreaming] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [peaking, setPeaking] = useState(false);
-  const [showHistogram, setShowHistogram] = useState(true);
+  const [showHistogram, setShowHistogram] = useState(false);
   const [showLoupe, setShowLoupe] = useState(false);
   const [loupeZoom, setLoupeZoom] = useState<2 | 3 | 4>(3);
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
@@ -35,6 +35,13 @@ export function LiveViewPanel({
   showLoupeRef.current = showLoupe;
   const loupeZoomRef = useRef<number>(3);
   loupeZoomRef.current = loupeZoom;
+  // Keep overlay flags in refs so toggling them doesn't reconnect the MJPEG stream
+  const showGridRef = useRef(showGrid);
+  showGridRef.current = showGrid;
+  const peakingRef = useRef(peaking);
+  peakingRef.current = peaking;
+  const showHistogramRef = useRef(showHistogram);
+  showHistogramRef.current = showHistogram;
 
   useEffect(() => {
     if (!connected || !streaming) {
@@ -43,124 +50,194 @@ export function LiveViewPanel({
     }
 
     let cancelled = false;
-    let timerId: number | undefined;
+    let retryTimer: number | undefined;
+    let activeController: AbortController | null = null;
     let frameCount = 0;
     let lastFpsTime = performance.now();
 
-    const fetchNextFrame = () => {
-      if (cancelled) return;
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
+    let pendingBlob: Blob | null = null;
+    let isRendering = false;
 
-      img.onload = () => {
-        if (cancelled) return;
-        setFrameError(null);
+    const renderLoop = async () => {
+      if (isRendering || cancelled) return;
+      isRendering = true;
+      try {
+        while (!cancelled && pendingBlob) {
+          const blob = pendingBlob;
+          pendingBlob = null;
 
-        const canvas = canvasRef.current;
-        if (canvas) {
-          if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-            canvas.width = img.naturalWidth || 640;
-            canvas.height = img.naturalHeight || 480;
+          const bitmap = await createImageBitmap(blob);
+          if (cancelled) {
+            bitmap.close();
+            break;
           }
-          const ctx = canvas.getContext('2d', { willReadFrequently: peaking || showHistogram });
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-            if (peaking || showHistogram) {
-              try {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+              canvas.width = bitmap.width || 640;
+              canvas.height = bitmap.height || 480;
+            }
+            const needPixels = peakingRef.current || showHistogramRef.current;
+            const ctx = canvas.getContext('2d', { willReadFrequently: needPixels });
+            if (ctx) {
+              ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+              if (needPixels) {
                 const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imgData.data;
 
-                if (showHistogram && histCanvasRef.current) {
+                if (showHistogramRef.current && histCanvasRef.current) {
                   drawHistogram(histCanvasRef.current, data);
                 }
 
-                if (peaking) {
+                if (peakingRef.current) {
                   applyFocusPeaking(data, canvas.width, canvas.height);
                   ctx.putImageData(imgData, 0, 0);
                 }
-              } catch {
-                // Canvas tainted if CORS missing; ignore overlays gracefully
               }
-            }
 
-            // Update magnified loupe canvas before drawing overlays on main canvas
-            if (showLoupeRef.current && focusPointRef.current && loupeCanvasRef.current) {
-              const lCanvas = loupeCanvasRef.current;
-              const lCtx = lCanvas.getContext('2d');
-              if (lCtx) {
+              // Update magnified loupe canvas before drawing overlays on main canvas
+              if (showLoupeRef.current && focusPointRef.current && loupeCanvasRef.current) {
+                const lCanvas = loupeCanvasRef.current;
+                const lCtx = lCanvas.getContext('2d');
+                if (lCtx) {
+                  const z = loupeZoomRef.current;
+                  const srcW = canvas.width / z;
+                  const srcH = canvas.height / z;
+                  const srcX = Math.max(0, Math.min(canvas.width - srcW, focusPointRef.current.x - srcW / 2));
+                  const srcY = Math.max(0, Math.min(canvas.height - srcH, focusPointRef.current.y - srcH / 2));
+
+                  lCtx.clearRect(0, 0, lCanvas.width, lCanvas.height);
+                  lCtx.imageSmoothingEnabled = true;
+                  lCtx.imageSmoothingQuality = 'high';
+                  lCtx.drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, lCanvas.width, lCanvas.height);
+
+                  // Draw delicate crosshair in center of loupe
+                  const cx = lCanvas.width / 2;
+                  const cy = lCanvas.height / 2;
+                  lCtx.strokeStyle = 'rgba(126, 231, 135, 0.7)';
+                  lCtx.lineWidth = 1;
+                  lCtx.beginPath();
+                  lCtx.moveTo(cx - 10, cy);
+                  lCtx.lineTo(cx + 10, cy);
+                  lCtx.moveTo(cx, cy - 10);
+                  lCtx.lineTo(cx, cy + 10);
+                  lCtx.stroke();
+                }
+              }
+
+              // Draw target focus box on main canvas
+              if (showLoupeRef.current && focusPointRef.current) {
                 const z = loupeZoomRef.current;
-                const srcW = canvas.width / z;
-                const srcH = canvas.height / z;
-                const srcX = Math.max(0, Math.min(canvas.width - srcW, focusPointRef.current.x - srcW / 2));
-                const srcY = Math.max(0, Math.min(canvas.height - srcH, focusPointRef.current.y - srcH / 2));
-
-                lCtx.clearRect(0, 0, lCanvas.width, lCanvas.height);
-                lCtx.imageSmoothingEnabled = true;
-                lCtx.imageSmoothingQuality = 'high';
-                lCtx.drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, lCanvas.width, lCanvas.height);
-
-                // Draw delicate crosshair in center of loupe
-                const cx = lCanvas.width / 2;
-                const cy = lCanvas.height / 2;
-                lCtx.strokeStyle = 'rgba(126, 231, 135, 0.7)';
-                lCtx.lineWidth = 1;
-                lCtx.beginPath();
-                lCtx.moveTo(cx - 10, cy);
-                lCtx.lineTo(cx + 10, cy);
-                lCtx.moveTo(cx, cy - 10);
-                lCtx.lineTo(cx, cy + 10);
-                lCtx.stroke();
+                drawFocusBox(
+                  ctx,
+                  focusPointRef.current.x,
+                  focusPointRef.current.y,
+                  canvas.width / z,
+                  canvas.height / z,
+                  `${z}x`,
+                );
               }
-            }
 
-            // Draw target focus box on main canvas
-            if (showLoupeRef.current && focusPointRef.current) {
-              const z = loupeZoomRef.current;
-              drawFocusBox(
-                ctx,
-                focusPointRef.current.x,
-                focusPointRef.current.y,
-                canvas.width / z,
-                canvas.height / z,
-                `${z}x`,
-              );
-            }
-
-            if (showGrid) {
-              drawGrid(ctx, canvas.width, canvas.height);
+              if (showGridRef.current) {
+                drawGrid(ctx, canvas.width, canvas.height);
+              }
             }
           }
+          bitmap.close();
+
+          frameCount += 1;
+          const now = performance.now();
+          if (now - lastFpsTime >= 1000) {
+            setFps(Math.round((frameCount * 1000) / (now - lastFpsTime)));
+            frameCount = 0;
+            lastFpsTime = now;
+          }
         }
-
-        frameCount += 1;
-        const now = performance.now();
-        if (now - lastFpsTime >= 1000) {
-          setFps(Math.round((frameCount * 1000) / (now - lastFpsTime)));
-          frameCount = 0;
-          lastFpsTime = now;
-        }
-
-        timerId = window.setTimeout(fetchNextFrame, 30);
-      };
-
-      img.onerror = () => {
-        if (cancelled) return;
-        setFrameError('LiveView stream unavailable');
-        setFps(0);
-        timerId = window.setTimeout(fetchNextFrame, 1000);
-      };
-
-      img.src = client.liveViewUrl(Date.now());
+      } catch {
+        // Ignore transient decode errors on partial/aborted frames
+      } finally {
+        isRendering = false;
+      }
     };
 
-    fetchNextFrame();
+    const startStream = async () => {
+      if (cancelled) return;
+      activeController = new AbortController();
+      try {
+        const res = await fetch(client.liveViewMjpegUrl(), {
+          signal: activeController.signal,
+          cache: 'no-store',
+        });
+
+        if (res.status === 503) {
+          setFrameError('LiveView busy (too many clients)');
+          setFps(0);
+          setStreaming(false);
+          return;
+        }
+        if (!res.ok || !res.body) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        setFrameError(null);
+        const reader = res.body.getReader();
+        let buffer = new Uint8Array(0);
+        const decoder = new TextDecoder('ascii');
+
+        while (!cancelled) {
+          const { value, done } = await reader.read();
+          if (done || cancelled) break;
+          if (!value || value.length === 0) continue;
+
+          const merged = new Uint8Array(buffer.length + value.length);
+          merged.set(buffer);
+          merged.set(value, buffer.length);
+          buffer = merged;
+
+          // Parse complete multipart/x-mixed-replace frames by Content-Length
+          while (true) {
+            const headerEnd = findHeaderEnd(buffer);
+            if (headerEnd === -1) break;
+
+            const headerText = decoder.decode(buffer.subarray(0, headerEnd));
+            const match = /Content-Length:\s*(\d+)/i.exec(headerText);
+            if (!match) {
+              buffer = buffer.subarray(headerEnd + 4);
+              continue;
+            }
+            const contentLen = Number(match[1]);
+            const bodyStart = headerEnd + 4;
+            if (buffer.length < bodyStart + contentLen) {
+              break;
+            }
+
+            // Copy frame slice & overwrite any un-decoded previous frame (zero backlog)
+            const jpegCopy = buffer.slice(bodyStart, bodyStart + contentLen);
+            buffer = buffer.subarray(bodyStart + contentLen);
+            pendingBlob = new Blob([jpegCopy], { type: 'image/jpeg' });
+            void renderLoop();
+          }
+        }
+      } catch (err) {
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
+          return;
+        }
+        setFrameError('LiveView stream unavailable');
+        setFps(0);
+        retryTimer = window.setTimeout(() => void startStream(), 1500);
+      }
+    };
+
+    void startStream();
 
     return () => {
       cancelled = true;
-      if (timerId !== undefined) window.clearTimeout(timerId);
+      activeController?.abort();
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [client, connected, streaming, showGrid, peaking, showHistogram]);
+  }, [client, connected, streaming]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -208,7 +285,10 @@ export function LiveViewPanel({
           <button
             type="button"
             className={`btn btn-sm ${streaming ? 'btn-active' : ''}`}
-            onClick={() => setStreaming((s) => !s)}
+            onClick={() => {
+              setFrameError(null);
+              setStreaming((s) => !s);
+            }}
           >
             {streaming ? 'Pause' : 'Resume'}
           </button>
@@ -316,6 +396,20 @@ export function LiveViewPanel({
   );
 }
 
+function findHeaderEnd(buf: Uint8Array): number {
+  for (let i = 0; i <= buf.length - 4; i++) {
+    if (
+      buf[i] === 13 &&
+      buf[i + 1] === 10 &&
+      buf[i + 2] === 13 &&
+      buf[i + 3] === 10
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.save();
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
@@ -359,7 +453,6 @@ function drawHistogram(canvas: HTMLCanvasElement, data: Uint8ClampedArray) {
 
 function applyFocusPeaking(data: Uint8ClampedArray, w: number, h: number) {
   const threshold = 70;
-  // Compute fast horizontal + vertical gradient on luminance
   const luma = new Uint8Array(w * h);
   for (let p = 0, i = 0; p < data.length; p += 4, i++) {
     luma[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;

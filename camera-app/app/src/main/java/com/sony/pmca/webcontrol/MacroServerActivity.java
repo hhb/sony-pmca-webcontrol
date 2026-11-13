@@ -86,11 +86,26 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private volatile int m_previewMag = 0;
 
     // Hardware LiveView / JPEG buffer (via Sony CameraSequence)
+    public static final int MAX_MJPEG_CLIENTS = 3;
     private final Object m_frameLock = new Object();
     private ByteBuffer m_liveviewByteBuf;
     private byte[] m_latestJpeg;
     private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
+    private long m_frameSeq = 0;
+    private int m_mjpegClients = 0;
+    private volatile boolean m_liveviewRunning = false;
+    private Thread m_liveviewThread;
+
+    public static final class LiveViewFrame {
+        public final long seq;
+        public final byte[] jpeg;
+
+        public LiveViewFrame(long seq, byte[] jpeg) {
+            this.seq = seq;
+            this.jpeg = jpeg;
+        }
+    }
 
     public CameraEventHub getEventHub() {
         return m_eventHub;
@@ -825,6 +840,14 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     opts.setOption("PREVIEW_FRAME_HEIGHT", 0);
                     m_cameraSequence.setReleaseLock(false);
                     m_cameraSequence.startPreviewSequence(opts);
+                    m_liveviewRunning = true;
+                    m_liveviewThread = new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            runLiveviewProducer();
+                        }
+                    }, "LiveviewProducer");
+                    m_liveviewThread.start();
                     Logger.info("CameraSequence LiveView started (640px JPEG)");
                 }
             } catch (Throwable t) {
@@ -835,7 +858,12 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     }
 
     private void stopLiveviewSequence() {
+        Thread threadToJoin;
         synchronized (m_frameLock) {
+            m_liveviewRunning = false;
+            threadToJoin = m_liveviewThread;
+            m_liveviewThread = null;
+            m_frameLock.notifyAll();
             if (m_cameraSequence != null) {
                 try {
                     m_cameraSequence.stopPreviewSequence();
@@ -848,49 +876,135 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 m_cameraSequence = null;
             }
         }
+        if (threadToJoin != null && threadToJoin != Thread.currentThread()) {
+            try {
+                threadToJoin.join(300);
+            } catch (InterruptedException ignored) {
+            }
+        }
     }
 
     private String getLibPath(String libName) {
         return "/data/data/" + getPackageName() + "/lib/" + libName;
     }
 
-    public byte[] getLatestLiveViewJpeg() {
-        synchronized (m_frameLock) {
-            long now = System.currentTimeMillis();
-            if (m_cameraSequence != null && (now - m_lastLiveviewFetchMs) >= 40) {
-                DeviceMemory[] frames = null;
-                try {
-                    frames = m_cameraSequence.getPreviewSequenceFrames(1);
-                    if (frames != null && frames.length > 0 && frames[0] != null) {
-                        DeviceBuffer buf = (DeviceBuffer) frames[0];
-                        if (m_liveviewByteBuf == null) {
-                            m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
-                        }
-                        m_liveviewByteBuf.clear();
-                        int size = buf.read(m_liveviewByteBuf);
-                        if (size > 0 && size <= LIVEVIEW_BUF_CAPACITY) {
-                            byte[] jpeg = new byte[size];
-                            m_liveviewByteBuf.rewind();
-                            m_liveviewByteBuf.get(jpeg, 0, size);
-                            m_latestJpeg = jpeg;
-                            m_lastLiveviewFetchMs = now;
-                        }
+    private void runLiveviewProducer() {
+        while (m_liveviewRunning) {
+            long intervalMs;
+            synchronized (m_frameLock) {
+                while (m_liveviewRunning && m_mjpegClients <= 0) {
+                    try {
+                        m_frameLock.wait(500);
+                    } catch (InterruptedException ignored) {
                     }
-                } catch (Throwable t) {
-                    Logger.error("getPreviewSequenceFrames error: " + t.toString());
-                } finally {
-                    if (frames != null) {
-                        for (DeviceMemory dm : frames) {
-                            if (dm != null) {
-                                try {
-                                    dm.release();
-                                } catch (Throwable ignored) {
-                                }
-                            }
+                }
+                if (!m_liveviewRunning || m_cameraSequence == null) {
+                    break;
+                }
+                if (m_mjpegClients <= 1) {
+                    intervalMs = 33;
+                } else if (m_mjpegClients == 2) {
+                    intervalMs = 50;
+                } else {
+                    intervalMs = 85;
+                }
+                fetchPreviewFrameLocked(intervalMs);
+            }
+            try {
+                Thread.sleep(intervalMs);
+            } catch (InterruptedException ignored) {
+            }
+        }
+    }
+
+    private void fetchPreviewFrameLocked(long minIntervalMs) {
+        long now = System.currentTimeMillis();
+        if (m_cameraSequence == null || (now - m_lastLiveviewFetchMs) < minIntervalMs) {
+            return;
+        }
+        DeviceMemory[] frames = null;
+        try {
+            frames = m_cameraSequence.getPreviewSequenceFrames(1);
+            if (frames != null && frames.length > 0 && frames[0] != null) {
+                DeviceBuffer buf = (DeviceBuffer) frames[0];
+                if (m_liveviewByteBuf == null) {
+                    m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
+                }
+                m_liveviewByteBuf.clear();
+                int size = buf.read(m_liveviewByteBuf);
+                if (size > 0 && size <= LIVEVIEW_BUF_CAPACITY) {
+                    byte[] jpeg = new byte[size];
+                    m_liveviewByteBuf.rewind();
+                    m_liveviewByteBuf.get(jpeg, 0, size);
+                    m_latestJpeg = jpeg;
+                    m_lastLiveviewFetchMs = now;
+                    m_frameSeq++;
+                    m_frameLock.notifyAll();
+                }
+            }
+        } catch (Throwable t) {
+            Logger.error("getPreviewSequenceFrames error: " + t.toString());
+        } finally {
+            if (frames != null) {
+                for (DeviceMemory dm : frames) {
+                    if (dm != null) {
+                        try {
+                            dm.release();
+                        } catch (Throwable ignored) {
                         }
                     }
                 }
             }
+        }
+    }
+
+    public boolean tryAcquireMjpegClient() {
+        synchronized (m_frameLock) {
+            if (m_mjpegClients >= MAX_MJPEG_CLIENTS) {
+                return false;
+            }
+            m_mjpegClients++;
+            m_frameLock.notifyAll();
+            return true;
+        }
+    }
+
+    public void releaseMjpegClient() {
+        synchronized (m_frameLock) {
+            if (m_mjpegClients > 0) {
+                m_mjpegClients--;
+            }
+            m_frameLock.notifyAll();
+        }
+    }
+
+    public LiveViewFrame waitForNextLiveViewFrame(long lastSeq, long timeoutMs) {
+        synchronized (m_frameLock) {
+            if (m_latestJpeg == null && m_cameraSequence != null) {
+                fetchPreviewFrameLocked(0);
+            }
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (m_liveviewRunning && m_frameSeq == lastSeq) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    break;
+                }
+                try {
+                    m_frameLock.wait(remaining);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+            }
+            if (!m_liveviewRunning || m_latestJpeg == null) {
+                return null;
+            }
+            return new LiveViewFrame(m_frameSeq, m_latestJpeg);
+        }
+    }
+
+    public byte[] getLatestLiveViewJpeg() {
+        synchronized (m_frameLock) {
+            fetchPreviewFrameLocked(33);
             return m_latestJpeg;
         }
     }

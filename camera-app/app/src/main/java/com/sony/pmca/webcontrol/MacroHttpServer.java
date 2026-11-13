@@ -9,7 +9,9 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +32,18 @@ public class MacroHttpServer extends NanoHTTPD {
         @Override
         public String getDescription() {
             return "504 Gateway Timeout";
+        }
+    };
+
+    private static final Response.IStatus STATUS_SERVICE_UNAVAILABLE = new Response.IStatus() {
+        @Override
+        public int getRequestStatus() {
+            return 503;
+        }
+
+        @Override
+        public String getDescription() {
+            return "503 Service Unavailable";
         }
     };
 
@@ -91,6 +105,13 @@ public class MacroHttpServer extends NanoHTTPD {
                 int timeout = parseInt(params.get("timeout"), 10);
                 JSONObject res = m_activity.getEventHub().waitForEvents(since, timeout);
                 return jsonOk(res.toString());
+            }
+
+            if ("/api/liveview.mjpeg".equals(uri)) {
+                if (!m_activity.tryAcquireMjpegClient()) {
+                    return addCors(new Response(STATUS_SERVICE_UNAVAILABLE, MIME_PLAINTEXT, "Too many LiveView clients"));
+                }
+                return new MjpegStreamResponse();
             }
 
             if ("/api/liveview.jpg".equals(uri)) {
@@ -211,6 +232,50 @@ public class MacroHttpServer extends NanoHTTPD {
         } catch (Throwable ignored) {
         }
         return addCors(new Response(status, "application/json", err.toString()));
+    }
+
+    private class MjpegStreamResponse extends Response {
+        MjpegStreamResponse() {
+            super(Status.OK, "multipart/x-mixed-replace; boundary=frame", "");
+        }
+
+        @Override
+        protected void send(OutputStream outputStream) {
+            try {
+                String headers = "HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                        + "Cache-Control: no-store, no-cache, must-revalidate\r\n"
+                        + "Connection: close\r\n"
+                        + "Access-Control-Allow-Origin: *\r\n"
+                        + "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                        + "Access-Control-Allow-Headers: Content-Type\r\n\r\n";
+                outputStream.write(headers.getBytes("UTF-8"));
+                outputStream.flush();
+
+                long lastSeq = -1;
+                while (true) {
+                    MacroServerActivity.LiveViewFrame frame = m_activity.waitForNextLiveViewFrame(lastSeq, 2000);
+                    if (frame == null) {
+                        break;
+                    }
+                    if (frame.seq == lastSeq) {
+                        continue;
+                    }
+                    lastSeq = frame.seq;
+                    String partHeader = "--frame\r\n"
+                            + "Content-Type: image/jpeg\r\n"
+                            + "Content-Length: " + frame.jpeg.length + "\r\n\r\n";
+                    outputStream.write(partHeader.getBytes("UTF-8"));
+                    outputStream.write(frame.jpeg);
+                    outputStream.write("\r\n".getBytes("UTF-8"));
+                    outputStream.flush();
+                }
+            } catch (IOException ignored) {
+                // Client disconnected
+            } finally {
+                m_activity.releaseMjpegClient();
+            }
+        }
     }
 
     private Response addCors(Response res) {
