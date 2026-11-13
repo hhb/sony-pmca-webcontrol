@@ -51,6 +51,30 @@ export function LiveViewPanel({
   showLoupeRef.current = showLoupe;
   const loupeZoomRef = useRef<number>(3);
   loupeZoomRef.current = loupeZoom;
+  const loupeTimerRef = useRef<number | null>(null);
+
+  const clearLoupeTimer = () => {
+    if (loupeTimerRef.current !== null) {
+      window.clearTimeout(loupeTimerRef.current);
+      loupeTimerRef.current = null;
+    }
+  };
+
+  const scheduleLoupeDismiss = (delayMs = 3000) => {
+    clearLoupeTimer();
+    loupeTimerRef.current = window.setTimeout(() => {
+      setShowLoupe(false);
+      loupeTimerRef.current = null;
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (loupeTimerRef.current !== null) {
+        window.clearTimeout(loupeTimerRef.current);
+      }
+    };
+  }, []);
   // Keep overlay flags in refs so toggling them doesn't reconnect the MJPEG stream
   const showGridRef = useRef(showGrid);
   showGridRef.current = showGrid;
@@ -307,6 +331,7 @@ export function LiveViewPanel({
 
     setFocusPoint({ x: clickX, y: clickY });
     setShowLoupe(true);
+    scheduleLoupeDismiss(3000);
   };
 
   return (
@@ -352,13 +377,19 @@ export function LiveViewPanel({
             type="button"
             className={`btn btn-sm ${showLoupe ? 'btn-active' : ''}`}
             onClick={() => {
-              if (!showLoupe && !focusPoint) {
-                const canvas = canvasRef.current;
-                const cx = canvas ? Math.round(canvas.width / 2) : 320;
-                const cy = canvas ? Math.round(canvas.height / 2) : 240;
-                setFocusPoint({ x: cx, y: cy });
+              if (!showLoupe) {
+                if (!focusPoint) {
+                  const canvas = canvasRef.current;
+                  const cx = canvas ? Math.round(canvas.width / 2) : 320;
+                  const cy = canvas ? Math.round(canvas.height / 2) : 240;
+                  setFocusPoint({ x: cx, y: cy });
+                }
+                setShowLoupe(true);
+                scheduleLoupeDismiss(3000);
+              } else {
+                clearLoupeTimer();
+                setShowLoupe(false);
               }
-              setShowLoupe((v) => !v);
             }}
             title="Click image to zoom in on focus area"
           >
@@ -386,6 +417,8 @@ export function LiveViewPanel({
         {showLoupe && focusPoint && connected && streaming && !frameError && (
           <div
             className={`loupe-window ${focusPoint.x > (canvasRef.current?.width ?? 640) / 2 ? 'loupe-left' : 'loupe-right'}`}
+            onMouseEnter={clearLoupeTimer}
+            onMouseLeave={() => scheduleLoupeDismiss(3000)}
           >
             <div className="loupe-header">
               <span className="loupe-title">🔍 {loupeZoom}x Focus Zoom</span>
@@ -393,7 +426,10 @@ export function LiveViewPanel({
                 <button
                   type="button"
                   className="btn btn-xs"
-                  onClick={() => setLoupeZoom((z) => (z === 2 ? 3 : z === 3 ? 4 : 2))}
+                  onClick={() => {
+                    setLoupeZoom((z) => (z === 2 ? 3 : z === 3 ? 4 : 2));
+                    scheduleLoupeDismiss(3000);
+                  }}
                   title="Switch zoom level (2x / 3x / 4x)"
                 >
                   {loupeZoom}x
@@ -401,7 +437,10 @@ export function LiveViewPanel({
                 <button
                   type="button"
                   className="btn btn-xs"
-                  onClick={() => setShowLoupe(false)}
+                  onClick={() => {
+                    clearLoupeTimer();
+                    setShowLoupe(false);
+                  }}
                   title="Close Loupe"
                 >
                   ✕
@@ -409,7 +448,7 @@ export function LiveViewPanel({
               </div>
             </div>
             <canvas ref={loupeCanvasRef} width={180} height={180} className="loupe-canvas" />
-            <div className="loupe-hint">Click image to move focus box</div>
+            <div className="loupe-hint">Click image to move focus box (auto-closes in 3s)</div>
           </div>
         )}
         {(!connected || frameError) && (
