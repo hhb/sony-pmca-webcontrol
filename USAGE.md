@@ -124,11 +124,22 @@ Base URL: `http://<camera-ip>:8080` (CORS enabled on all endpoints).
 * **`POST /api/capture`**
 
 ### 8. Adjust Exposure Parameters
-* **`POST /api/exposure?aperture=<inc|dec>&shutter=<inc|dec>&iso=<int>`**
+* **`POST /api/exposure?aperture=<inc|dec>&shutter=<inc|dec>&iso=<int>&isoOp=<inc|dec>`**
 * All query parameters are optional and can be combined:
   * `aperture=inc` (stop down, e.g., F5.6 → F6.3) or `dec` (open up).
   * `shutter=inc` (faster shutter, e.g., 1/10 → 1/13) or `dec` (slower shutter).
-  * `iso=100` (set specific ISO sensitivity).
+  * `isoOp=inc` (step ISO up, e.g. AUTO → 100 → 125 → 160...) or `dec` (step ISO down).
+  * `iso=100` (set specific ISO sensitivity directly; `0` for AUTO).
+
+### 9. Zoom and MF Assist Preview Magnification
+* **`POST /api/zoom?dir=<in|out>&action=<start|stop>`** — Power Zoom continuous drive.
+* **`POST /api/zoom?mag=<1.0|1.4|2.0|4.0>`** — Set digital zoom scale factor.
+* **`POST /api/zoom?magnify=<toggle|off|5.9|11.7>`** — Toggle in-camera MF Assist preview magnification for precision manual focus inspection.
+
+### 10. Photo Listing and Downloads
+* **`GET /api/photos`** — Returns JSON list of all captured photos (`.JPG` and `.ARW`) on the camera SD card.
+* **`GET /api/photos/latest`** — Downloads the most recently taken photo directly as image JPEG/RAW.
+* **`GET /api/photos/download?file=<relativePath>`** — Downloads a specific photo file from the SD card.
 
 ---
 
