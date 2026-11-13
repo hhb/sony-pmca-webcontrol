@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
@@ -23,17 +23,58 @@ export function ExposureControl({
   onError,
 }: ExposureControlProps) {
   const [busy, setBusy] = useState(false);
+  const [localEvIndex, setLocalEvIndex] = useState<number | null>(null);
+  const [localIso, setLocalIso] = useState<number | null>(null);
+  const [isoOptions, setIsoOptions] = useState<number[]>(ISO_PRESETS);
 
   const ec = typeof state?.exposureCompensation === 'object' ? state.exposureCompensation : undefined;
-  const evIndex =
+  const stateEvIndex =
     typeof state?.exposureCompensation === 'number'
       ? state.exposureCompensation
       : typeof ec?.index === 'number'
         ? ec.index
         : 0;
-  const evMin = typeof ec?.min === 'number' ? ec.min : -9;
-  const evMax = typeof ec?.max === 'number' ? ec.max : 9;
+  const evIndex = localEvIndex !== null ? localEvIndex : stateEvIndex;
+  const evMin = typeof ec?.min === 'number' ? ec.min : -15;
+  const evMax = typeof ec?.max === 'number' ? ec.max : 15;
   const evStep = typeof ec?.step === 'number' && ec.step > 0 ? ec.step : 1 / 3;
+
+  // Sync actual hardware EV compensation and supported ISOs on mount/reconnect
+  useEffect(() => {
+    if (!connected) {
+      setLocalEvIndex(null);
+      setLocalIso(null);
+      return;
+    }
+    let cancelled = false;
+    client
+      .getExposureCompensation()
+      .then((val) => {
+        if (!cancelled && typeof val === 'number') {
+          setLocalEvIndex(val);
+        }
+      })
+      .catch(() => {});
+
+    client
+      .getSupportedISOSensitivities()
+      .then((list) => {
+        if (!cancelled && Array.isArray(list) && list.length > 0) {
+          setIsoOptions(list);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connected]);
+
+  useEffect(() => {
+    if (state?.autoIso !== undefined && state.autoIso === localIso) {
+      setLocalIso(null);
+    }
+  }, [state?.autoIso, localIso]);
 
   const runAction = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -49,12 +90,26 @@ export function ExposureControl({
   const changeEv = async (delta: number) => {
     const target = Math.max(evMin, Math.min(evMax, evIndex + delta));
     if (target === evIndex) return;
-    await client.setExposureCompensation(target);
+    const prev = evIndex;
+    setLocalEvIndex(target);
+    try {
+      await client.setExposureCompensation(target);
+    } catch (err) {
+      setLocalEvIndex(prev);
+      throw err;
+    }
   };
 
   const resetEv = async () => {
     if (evIndex === 0) return;
-    await client.setExposureCompensation(0);
+    const prev = evIndex;
+    setLocalEvIndex(0);
+    try {
+      await client.setExposureCompensation(0);
+    } catch (err) {
+      setLocalEvIndex(prev);
+      throw err;
+    }
   };
 
   const aperture = formatAperture(state?.aperture?.currentAperture);
@@ -62,7 +117,7 @@ export function ExposureControl({
     state?.shutter?.currentShutterSpeed_n,
     state?.shutter?.currentShutterSpeed_d,
   );
-  const isoValue = state?.autoIso;
+  const isoValue = localIso !== null ? localIso : state?.autoIso;
   const evDisplay = connected ? formatEv(evIndex, evStep) : '--';
 
   return (
@@ -142,14 +197,22 @@ export function ExposureControl({
             onChange={(e) => {
               const val = Number(e.target.value);
               if (!Number.isNaN(val)) {
-                void runAction(() => client.setIso(val));
+                setLocalIso(val);
+                void runAction(async () => {
+                  try {
+                    await client.setIso(val);
+                  } catch (err) {
+                    setLocalIso(null);
+                    throw err;
+                  }
+                });
               }
             }}
           >
             <option value="" disabled>
               Select ISO
             </option>
-            {ISO_PRESETS.map((iso) => (
+            {isoOptions.map((iso) => (
               <option key={iso} value={iso}>
                 {iso === 0 ? 'AUTO' : `ISO ${iso}`}
               </option>

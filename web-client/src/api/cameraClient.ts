@@ -270,7 +270,15 @@ export class CameraClient {
   }
 
   setIso(iso: number): Promise<unknown> {
-    return this.call('camera', 'setISOSensitivity', [iso]);
+    return this.call('modifier', 'setISOSensitivity', [iso]);
+  }
+
+  getSupportedISOSensitivities(): Promise<number[]> {
+    return this.call<number[]>('modifier', 'getSupportedISOSensitivities');
+  }
+
+  getExposureCompensation(): Promise<number> {
+    return this.call<number>('params', 'getExposureCompensation');
   }
 
   setExposureCompensation(index: number): Promise<unknown> {

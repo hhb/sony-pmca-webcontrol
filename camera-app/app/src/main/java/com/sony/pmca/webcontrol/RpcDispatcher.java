@@ -311,6 +311,20 @@ public class RpcDispatcher {
         if ("camera".equals(target)) {
             if ("capabilities".equals(method)) {
                 resultObj = buildCapabilities(cam);
+            } else if (!m_cameraMethods.containsKey(method) && m_modifierMethods.containsKey(method)) {
+                // Graceful fallback: method belongs to modifier (e.g. setISOSensitivity)
+                Method m = resolveMethod(m_modifierMethods, method, args);
+                Object[] javaArgs = convertJsonArgs(m.getParameterTypes(), args);
+                if (method.startsWith("set")) {
+                    Camera.Parameters p = cam.createEmptyParameters();
+                    CameraEx.ParametersModifier mod = cam.createParametersModifier(p);
+                    resultObj = m.invoke(mod, javaArgs);
+                    cam.getNormalCamera().setParameters(p);
+                } else {
+                    Camera.Parameters p = cam.getNormalCamera().getParameters();
+                    CameraEx.ParametersModifier mod = cam.createParametersModifier(p);
+                    resultObj = m.invoke(mod, javaArgs);
+                }
             } else {
                 Method m = resolveMethod(m_cameraMethods, method, args);
                 Object[] javaArgs = convertJsonArgs(m.getParameterTypes(), args);
@@ -336,6 +350,21 @@ public class RpcDispatcher {
                 Camera.Parameters p = cam.createEmptyParameters();
                 resultObj = m.invoke(p, javaArgs);
                 cam.getNormalCamera().setParameters(p);
+
+                if ("setExposureCompensation".equals(method) && ctx instanceof MacroServerActivity) {
+                    try {
+                        MacroServerActivity act = (MacroServerActivity) ctx;
+                        Camera.Parameters cur = cam.getNormalCamera().getParameters();
+                        JSONObject ecObj = new JSONObject();
+                        ecObj.put("index", cur.getExposureCompensation());
+                        ecObj.put("step", (double) cur.getExposureCompensationStep());
+                        ecObj.put("min", cur.getMinExposureCompensation());
+                        ecObj.put("max", cur.getMaxExposureCompensation());
+                        act.getEventHub().setState("exposureCompensation", ecObj);
+                        act.getEventHub().emit("SettingChanged", new JSONObject());
+                    } catch (Throwable ignored) {
+                    }
+                }
             } else {
                 Camera.Parameters p = cam.getNormalCamera().getParameters();
                 resultObj = m.invoke(p, javaArgs);
