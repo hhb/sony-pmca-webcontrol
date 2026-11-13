@@ -33,6 +33,10 @@ public class MacroHttpServer extends NanoHTTPD {
             return jsonOk(m_activity.getStatusJson());
         }
 
+        if ("/api/log".equals(uri)) {
+            return addCors(new Response(Response.Status.OK, MIME_PLAINTEXT, m_activity.getCrashLogText()));
+        }
+
         if ("/api/liveview.jpg".equals(uri)) {
             byte[] jpeg = m_activity.getLatestLiveViewJpeg();
             if (jpeg == null) {

@@ -3,12 +3,11 @@ package com.github.ma1co.pmcademo.app;
 import android.app.Activity;
 import android.content.Intent;
 import android.view.KeyEvent;
-import com.github.ma1co.openmemories.framework.DateTime;
-import com.github.ma1co.openmemories.framework.DeviceInfo;
-import com.github.ma1co.openmemories.framework.DisplayManager;
+import com.sony.scalar.hardware.avio.DisplayManager;
 import com.sony.scalar.sysutil.ScalarInput;
+import com.sony.scalar.sysutil.didep.Gpelibrary;
 
-public class BaseActivity extends Activity implements DisplayManager.Listener {
+public class BaseActivity extends Activity {
     public static final String NOTIFICATION_DISPLAY_CHANGED = "NOTIFICATION_DISPLAY_CHANGED";
 
     private DisplayManager displayManager;
@@ -18,11 +17,22 @@ public class BaseActivity extends Activity implements DisplayManager.Listener {
         Logger.info("Resume " + getComponentName().getClassName());
         super.onResume();
 
-        displayManager = DisplayManager.create(this);
-        displayManager.addListener(this);
-
         setColorDepth(true);
         notifyAppInfo();
+
+        try {
+            displayManager = new DisplayManager();
+            displayManager.setDisplayStatusListener(new DisplayManager.DisplayEventListener() {
+                @Override
+                public void onDeviceStatusChanged(int event) {
+                    if (event == DisplayManager.EVENT_SWITCH_DEVICE && displayManager != null) {
+                        onDisplayChanged(displayManager.getActiveDevice());
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            Logger.error("DisplayManager init error: " + t.toString());
+        }
     }
 
     @Override
@@ -32,8 +42,14 @@ public class BaseActivity extends Activity implements DisplayManager.Listener {
 
         setColorDepth(false);
 
-        displayManager.release();
-        displayManager = null;
+        if (displayManager != null) {
+            try {
+                displayManager.releaseDisplayStatusListener();
+                displayManager.finish();
+            } catch (Throwable ignored) {
+            }
+            displayManager = null;
+        }
     }
 
     @Override
@@ -180,42 +196,40 @@ public class BaseActivity extends Activity implements DisplayManager.Listener {
         return true;
     }
 
-    @Override
-    public void displayChanged(DisplayManager.Display display) {
+    public void onDisplayChanged(String device) {
         AppNotificationManager.getInstance().notify(NOTIFICATION_DISPLAY_CHANGED);
     }
 
     protected void setAutoPowerOffMode(boolean enable) {
-        String mode = enable ? "APO/NORMAL" : "APO/NO";// or "APO/SPECIAL" ?
-        Intent intent = new Intent();
-        intent.setAction("com.android.server.DAConnectionManagerService.apo");
-        intent.putExtra("apo_info", mode);
-        sendBroadcast(intent);
+        try {
+            String mode = enable ? "APO/NORMAL" : "APO/NO";
+            Intent intent = new Intent();
+            intent.setAction("com.android.server.DAConnectionManagerService.apo");
+            intent.putExtra("apo_info", mode);
+            sendBroadcast(intent);
+        } catch (Throwable ignored) {
+        }
     }
 
     protected void setColorDepth(boolean highQuality) {
-        displayManager.setColorDepth(highQuality ? DisplayManager.ColorDepth.HIGH : DisplayManager.ColorDepth.LOW);
+        try {
+            Gpelibrary.GS_FRAMEBUFFER_TYPE type = highQuality ? Gpelibrary.GS_FRAMEBUFFER_TYPE.ABGR8888 : Gpelibrary.GS_FRAMEBUFFER_TYPE.RGBA4444;
+            Gpelibrary.changeFrameBufferPixel(type);
+        } catch (Throwable ignored) {
+        }
     }
 
     protected void notifyAppInfo() {
-        Intent intent = new Intent("com.android.server.DAConnectionManagerService.AppInfoReceive");
-        intent.putExtra("package_name", getComponentName().getPackageName());
-        intent.putExtra("class_name", getComponentName().getClassName());
-        //intent.putExtra("pkey", new String[] {});// either this or these two:
-        //intent.putExtra("pullingback_key", new String[] {});
-        //intent.putExtra("resume_key", new String[] {});
-        sendBroadcast(intent);
+        try {
+            Intent intent = new Intent("com.android.server.DAConnectionManagerService.AppInfoReceive");
+            intent.putExtra("package_name", getComponentName().getPackageName());
+            intent.putExtra("class_name", getComponentName().getClassName());
+            sendBroadcast(intent);
+        } catch (Throwable ignored) {
+        }
     }
 
     public DisplayManager getDisplayManager() {
         return displayManager;
-    }
-
-    public DeviceInfo getDeviceInfo() {
-        return DeviceInfo.getInstance();
-    }
-
-    public DateTime getDateTime() {
-        return DateTime.getInstance();
     }
 }

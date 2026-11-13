@@ -24,8 +24,10 @@ import com.github.ma1co.pmcademo.app.Logger;
 import com.sony.scalar.hardware.CameraEx;
 import com.sony.scalar.sysutil.ScalarProperties;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.io.File;
+import java.io.FileReader;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -68,9 +70,10 @@ public class MacroServerActivity extends BaseActivity
     private int m_stuckCount = 0;
     private LinkedList<Integer> m_focusQueue = new LinkedList<Integer>();
 
-    // Latest preview frame buffer (YUV)
+    // Preview / JPEG buffer
     private final Object m_frameLock = new Object();
     private byte[] m_latestYuv;
+    private byte[] m_latestJpeg;
     private int m_previewWidth = 0;
     private int m_previewHeight = 0;
     private int m_previewFormat = ImageFormat.NV21;
@@ -117,9 +120,13 @@ public class MacroServerActivity extends BaseActivity
         m_networkStateReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                NetworkInfo info = intent.getParcelableExtra(WifiManager.EXTRA_NETWORK_INFO);
-                if (info != null) {
-                    handleNetworkState(info.getDetailedState());
+                try {
+                    NetworkInfo info = intent.getParcelableExtra(WifiManager.EXTRA_NETWORK_INFO);
+                    if (info != null) {
+                        handleNetworkState(info.getDetailedState());
+                    }
+                } catch (Throwable t) {
+                    Logger.error("Network receiver error: " + t.toString());
                 }
             }
         };
@@ -131,68 +138,94 @@ public class MacroServerActivity extends BaseActivity
     protected void onResume() {
         super.onResume();
 
-        setAutoPowerOffMode(false);
-        registerReceiver(m_networkStateReceiver, new IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION));
-        m_wifiManager.setWifiEnabled(true);
+        try {
+            setAutoPowerOffMode(false);
+            registerReceiver(m_networkStateReceiver, new IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION));
+            m_wifiManager.setWifiEnabled(true);
+        } catch (Throwable t) {
+            Logger.error("Wi-Fi init error: " + t.toString());
+        }
 
         try {
             m_httpServer.start();
-        } catch (IOException e) {
-            Logger.error("Failed to start HTTP server: " + e.getMessage());
+        } catch (Throwable t) {
+            Logger.error("Failed to start HTTP server: " + t.toString());
         }
 
-        m_camera = CameraEx.open(0, null);
-        m_surfaceHolder.addCallback(this);
-        m_autoReviewControl = new CameraEx.AutoPictureReviewControl();
-        m_camera.setAutoPictureReviewControl(m_autoReviewControl);
-        m_camera.setShutterListener(this);
+        try {
+            m_camera = CameraEx.open(0, null);
+            m_surfaceHolder.addCallback(this);
+            m_autoReviewControl = new CameraEx.AutoPictureReviewControl();
+            m_camera.setAutoPictureReviewControl(m_autoReviewControl);
+            m_camera.setShutterListener(this);
 
-        m_camera.setFocusDriveListener(new CameraEx.FocusDriveListener() {
-            @Override
-            public void onChanged(CameraEx.FocusPosition focusPosition, CameraEx cameraEx) {
-                m_handler.removeCallbacks(m_checkFocusRunnable);
-                m_stuckCount = 0;
-                m_maxFocus = focusPosition.maxPosition;
-                m_curFocus = focusPosition.currentPosition;
-                m_focusScaleView.setMaxPosition(m_maxFocus);
-                m_focusScaleView.setCurPosition(m_curFocus);
-
-                if (m_state == State.focusing) {
-                    if (m_curFocus == m_targetFocus) {
-                        m_state = State.idle;
-                    } else {
-                        driveTowardTarget();
-                    }
-                } else if (m_state == State.bracketing && !m_focusQueue.isEmpty()) {
-                    if (m_curFocus == m_focusQueue.getFirst()) {
-                        takePictureInternal();
-                    } else {
-                        driveTowardTarget();
+            m_camera.setJpegListener(new CameraEx.JpegListener() {
+                @Override
+                public void onPictureTaken(byte[] data, CameraEx cameraEx) {
+                    if (data != null) {
+                        synchronized (m_frameLock) {
+                            m_latestJpeg = data;
+                        }
                     }
                 }
-                updateStatusText();
-            }
-        });
+            });
 
-        m_camera.setApertureChangeListener(new CameraEx.ApertureChangeListener() {
-            @Override
-            public void onApertureChange(CameraEx.ApertureInfo apertureInfo, CameraEx cameraEx) {
-                m_aperture = apertureInfo.currentAperture;
-                updateStatusText();
-            }
-        });
+            m_camera.setFocusDriveListener(new CameraEx.FocusDriveListener() {
+                @Override
+                public void onChanged(CameraEx.FocusPosition focusPosition, CameraEx cameraEx) {
+                    m_handler.removeCallbacks(m_checkFocusRunnable);
+                    m_stuckCount = 0;
+                    m_maxFocus = focusPosition.maxPosition;
+                    m_curFocus = focusPosition.currentPosition;
+                    m_focusScaleView.setMaxPosition(m_maxFocus);
+                    m_focusScaleView.setCurPosition(m_curFocus);
 
-        m_camera.setShutterSpeedChangeListener(new CameraEx.ShutterSpeedChangeListener() {
-            @Override
-            public void onShutterSpeedChange(CameraEx.ShutterSpeedInfo shutterSpeedInfo, CameraEx cameraEx) {
-                m_shutterSpeed = formatShutter(shutterSpeedInfo.currentShutterSpeed_n, shutterSpeedInfo.currentShutterSpeed_d);
-                updateStatusText();
-            }
-        });
+                    if (m_state == State.focusing) {
+                        if (m_curFocus == m_targetFocus) {
+                            m_state = State.idle;
+                        } else {
+                            driveTowardTarget();
+                        }
+                    } else if (m_state == State.bracketing && !m_focusQueue.isEmpty()) {
+                        if (m_curFocus == m_focusQueue.getFirst()) {
+                            takePictureInternal();
+                        } else {
+                            driveTowardTarget();
+                        }
+                    }
+                    updateStatusText();
+                }
+            });
 
-        initCameraDefaults();
-        refreshExposureCache();
-        updateStatusText();
+            m_camera.setApertureChangeListener(new CameraEx.ApertureChangeListener() {
+                @Override
+                public void onApertureChange(CameraEx.ApertureInfo apertureInfo, CameraEx cameraEx) {
+                    if (apertureInfo != null) {
+                        m_aperture = apertureInfo.currentAperture;
+                        updateStatusText();
+                    }
+                }
+            });
+
+            m_camera.setShutterSpeedChangeListener(new CameraEx.ShutterSpeedChangeListener() {
+                @Override
+                public void onShutterSpeedChange(CameraEx.ShutterSpeedInfo shutterSpeedInfo, CameraEx cameraEx) {
+                    if (shutterSpeedInfo != null) {
+                        m_shutterSpeed = formatShutter(
+                                shutterSpeedInfo.currentShutterSpeed_n,
+                                shutterSpeedInfo.currentShutterSpeed_d);
+                        updateStatusText();
+                    }
+                }
+            });
+
+            initCameraDefaults();
+            refreshExposureCache();
+            updateStatusText();
+        } catch (Throwable t) {
+            Logger.error("onResume camera init error: " + t.toString());
+            m_tvInstructions.setText("Init error: " + t.getMessage());
+        }
     }
 
     @Override
@@ -203,53 +236,89 @@ public class MacroServerActivity extends BaseActivity
         m_handler.removeCallbacks(m_checkFocusRunnable);
 
         if (m_httpServer != null) {
-            m_httpServer.stop();
+            try {
+                m_httpServer.stop();
+            } catch (Throwable ignored) {
+            }
         }
 
         try {
             unregisterReceiver(m_networkStateReceiver);
-        } catch (IllegalArgumentException ignored) {
+        } catch (Throwable ignored) {
         }
-        m_wifiManager.setWifiEnabled(false);
+        try {
+            m_wifiManager.setWifiEnabled(false);
+        } catch (Throwable ignored) {
+        }
         setAutoPowerOffMode(true);
 
         if (m_camera != null) {
             m_surfaceHolder.removeCallback(this);
             try {
                 m_camera.getNormalCamera().setPreviewCallback(null);
+            } catch (Throwable ignored) {
+            }
+            try {
                 m_camera.getNormalCamera().stopPreview();
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
             if (m_autoReviewControl != null) {
-                m_autoReviewControl.setPictureReviewTime(m_pictureReviewTime);
-                m_camera.setAutoPictureReviewControl(null);
+                try {
+                    m_autoReviewControl.setPictureReviewTime(m_pictureReviewTime);
+                    m_camera.setAutoPictureReviewControl(null);
+                } catch (Throwable ignored) {
+                }
                 m_autoReviewControl = null;
             }
-            m_camera.release();
+            try {
+                m_camera.release();
+            } catch (Throwable ignored) {
+            }
             m_camera = null;
         }
     }
 
     private void initCameraDefaults() {
-        Camera.Parameters params = m_camera.getNormalCamera().getParameters();
-        CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
-        params.setSceneMode(CameraEx.ParametersModifier.SCENE_MODE_MANUAL_EXPOSURE);
-        modifier.setDriveMode(CameraEx.ParametersModifier.DRIVE_MODE_SINGLE);
-        params.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
-        modifier.setSelfTimer(0);
-        m_camera.getNormalCamera().setParameters(params);
-
-        String platformVersion = ScalarProperties.getString(ScalarProperties.PROP_VERSION_PLATFORM);
-        if (platformVersion != null) {
-            String[] split = platformVersion.split("\\Q.\\E");
-            if (split.length >= 2 && Integer.parseInt(split[1]) < 3) {
-                m_state = State.error;
-                m_tvInstructions.setText("ERROR: Focus drive not supported on this body");
-            }
+        // IMPORTANT: On Sony CameraEx, setParameters MUST use m_camera.createEmptyParameters(),
+        // NEVER m_camera.getNormalCamera().getParameters() (which throws RuntimeException)!
+        try {
+            Camera.Parameters params = m_camera.createEmptyParameters();
+            CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
+            params.setSceneMode(CameraEx.ParametersModifier.SCENE_MODE_MANUAL_EXPOSURE);
+            modifier.setDriveMode(CameraEx.ParametersModifier.DRIVE_MODE_SINGLE);
+            modifier.setSelfTimer(0);
+            m_camera.getNormalCamera().setParameters(params);
+        } catch (Throwable t) {
+            Logger.error("setDefaults exposure/drive warning: " + t.toString());
         }
 
-        m_pictureReviewTime = m_autoReviewControl.getPictureReviewTime();
-        m_autoReviewControl.setPictureReviewTime(0);
+        try {
+            Camera.Parameters focusParams = m_camera.createEmptyParameters();
+            focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
+            m_camera.getNormalCamera().setParameters(focusParams);
+        } catch (Throwable t) {
+            Logger.error("setDefaults MF warning (check lens AF/MF): " + t.toString());
+        }
+
+        try {
+            String platformVersion = ScalarProperties.getString(ScalarProperties.PROP_VERSION_PLATFORM);
+            if (platformVersion != null) {
+                String[] split = platformVersion.split("\\Q.\\E");
+                if (split.length >= 2 && Integer.parseInt(split[1]) < 3) {
+                    m_state = State.error;
+                    m_tvInstructions.setText("ERROR: Focus drive not supported on this body");
+                }
+            }
+        } catch (Throwable t) {
+            Logger.error("Platform check warning: " + t.toString());
+        }
+
+        try {
+            m_pictureReviewTime = m_autoReviewControl.getPictureReviewTime();
+            m_autoReviewControl.setPictureReviewTime(0);
+        } catch (Throwable t) {
+            Logger.error("AutoReview init warning: " + t.toString());
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -257,15 +326,19 @@ public class MacroServerActivity extends BaseActivity
         if (m_camera == null) {
             return;
         }
-        Camera.Parameters params = m_camera.getNormalCamera().getParameters();
-        CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
-        m_aperture = modifier.getAperture();
-        Pair<Integer, Integer> ss = modifier.getShutterSpeed();
-        if (ss != null) {
-            m_shutterSpeed = formatShutter(ss.first, ss.second);
+        try {
+            Camera.Parameters params = m_camera.getNormalCamera().getParameters();
+            CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
+            m_aperture = modifier.getAperture();
+            Pair<Integer, Integer> ss = modifier.getShutterSpeed();
+            if (ss != null) {
+                m_shutterSpeed = formatShutter(ss.first, ss.second);
+            }
+            m_iso = modifier.getISOSensitivity();
+            m_supportedIsos = (List<Integer>) modifier.getSupportedISOSensitivities();
+        } catch (Throwable t) {
+            Logger.error("refreshExposureCache warning: " + t.toString());
         }
-        m_iso = modifier.getISOSensitivity();
-        m_supportedIsos = (List<Integer>) modifier.getSupportedISOSensitivities();
     }
 
     private void handleNetworkState(NetworkInfo.DetailedState state) {
@@ -328,28 +401,76 @@ public class MacroServerActivity extends BaseActivity
                 m_latestYuv = new byte[data.length];
             }
             System.arraycopy(data, 0, m_latestYuv, 0, data.length);
+            if (m_previewWidth <= 0 || m_previewHeight <= 0) {
+                // Infer common NV21 dimensions if getPreviewSize() returned null
+                if (data.length == 640 * 480 * 3 / 2) {
+                    m_previewWidth = 640;
+                    m_previewHeight = 480;
+                } else if (data.length == 640 * 360 * 3 / 2) {
+                    m_previewWidth = 640;
+                    m_previewHeight = 360;
+                } else if (data.length == 1024 * 768 * 3 / 2) {
+                    m_previewWidth = 1024;
+                    m_previewHeight = 768;
+                }
+            }
         }
     }
 
     public byte[] getLatestLiveViewJpeg() {
-        byte[] yuvCopy;
+        byte[] yuvCopy = null;
+        byte[] jpegCopy = null;
         int w;
         int h;
         int fmt;
         synchronized (m_frameLock) {
-            if (m_latestYuv == null || m_previewWidth <= 0 || m_previewHeight <= 0) {
-                return null;
+            if (m_latestYuv != null && m_previewWidth > 0 && m_previewHeight > 0) {
+                yuvCopy = new byte[m_latestYuv.length];
+                System.arraycopy(m_latestYuv, 0, yuvCopy, 0, m_latestYuv.length);
+            } else if (m_latestJpeg != null) {
+                jpegCopy = m_latestJpeg;
             }
-            yuvCopy = new byte[m_latestYuv.length];
-            System.arraycopy(m_latestYuv, 0, yuvCopy, 0, m_latestYuv.length);
             w = m_previewWidth;
             h = m_previewHeight;
             fmt = m_previewFormat;
         }
-        YuvImage yuvImage = new YuvImage(yuvCopy, fmt, w, h, null);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        yuvImage.compressToJpeg(new Rect(0, 0, w, h), 75, baos);
-        return baos.toByteArray();
+        if (yuvCopy != null) {
+            try {
+                YuvImage yuvImage = new YuvImage(yuvCopy, fmt, w, h, null);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                yuvImage.compressToJpeg(new Rect(0, 0, w, h), 75, baos);
+                return baos.toByteArray();
+            } catch (Throwable t) {
+                Logger.error("YUV compress error: " + t.toString());
+            }
+        }
+        return jpegCopy;
+    }
+
+    public String getCrashLogText() {
+        File f = Logger.getFile();
+        if (!f.exists()) {
+            return "Log file does not exist yet: " + f.getAbsolutePath();
+        }
+        StringBuilder sb = new StringBuilder();
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader(f));
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+        } catch (Throwable t) {
+            sb.append("Error reading log: ").append(t.toString());
+        } finally {
+            if (br != null) {
+                try {
+                    br.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return sb.toString();
     }
 
     // --- SurfaceHolder.Callback ---
@@ -358,16 +479,28 @@ public class MacroServerActivity extends BaseActivity
     public void surfaceCreated(SurfaceHolder holder) {
         try {
             Camera cam = m_camera.getNormalCamera();
-            Camera.Parameters params = cam.getParameters();
-            Camera.Size previewSize = params.getPreviewSize();
-            m_previewWidth = previewSize.width;
-            m_previewHeight = previewSize.height;
-            m_previewFormat = params.getPreviewFormat();
             cam.setPreviewDisplay(holder);
-            cam.setPreviewCallback(this);
             cam.startPreview();
-        } catch (IOException e) {
-            Logger.error("surfaceCreated error: " + e.getMessage());
+
+            try {
+                Camera.Parameters params = cam.getParameters();
+                if (params != null) {
+                    Camera.Size previewSize = params.getPreviewSize();
+                    if (previewSize != null) {
+                        m_previewWidth = previewSize.width;
+                        m_previewHeight = previewSize.height;
+                    }
+                    int fmt = params.getPreviewFormat();
+                    if (fmt > 0) {
+                        m_previewFormat = fmt;
+                    }
+                }
+                cam.setPreviewCallback(this);
+            } catch (Throwable t) {
+                Logger.info("Optional PreviewCallback not active: " + t.toString());
+            }
+        } catch (Throwable t) {
+            Logger.error("surfaceCreated error: " + t.toString());
         }
     }
 
@@ -381,10 +514,6 @@ public class MacroServerActivity extends BaseActivity
 
     // --- Public API Methods called from MacroHttpServer ---
 
-    public void postToUi(Runnable r) {
-        m_handler.post(r);
-    }
-
     public void driveFocusStep(final boolean far, final int speed) {
         m_handler.post(new Runnable() {
             @Override
@@ -392,10 +521,14 @@ public class MacroServerActivity extends BaseActivity
                 if (m_camera == null || m_state == State.error) {
                     return;
                 }
-                int clampedSpeed = Math.max(1, Math.min(4, speed));
-                m_camera.startOneShotFocusDrive(
-                        far ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
-                        clampedSpeed);
+                try {
+                    int clampedSpeed = Math.max(1, Math.min(4, speed));
+                    m_camera.startOneShotFocusDrive(
+                            far ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
+                            clampedSpeed);
+                } catch (Throwable t) {
+                    Logger.error("driveFocusStep error: " + t.toString());
+                }
             }
         });
     }
@@ -492,25 +625,29 @@ public class MacroServerActivity extends BaseActivity
                 if (m_camera == null) {
                     return;
                 }
-                if ("inc".equalsIgnoreCase(apertureOp)) {
-                    m_camera.incrementAperture();
-                } else if ("dec".equalsIgnoreCase(apertureOp)) {
-                    m_camera.decrementAperture();
-                }
+                try {
+                    if ("inc".equalsIgnoreCase(apertureOp)) {
+                        m_camera.incrementAperture();
+                    } else if ("dec".equalsIgnoreCase(apertureOp)) {
+                        m_camera.decrementAperture();
+                    }
 
-                if ("inc".equalsIgnoreCase(shutterOp)) {
-                    m_camera.incrementShutterSpeed();
-                } else if ("dec".equalsIgnoreCase(shutterOp)) {
-                    m_camera.decrementShutterSpeed();
-                }
+                    if ("inc".equalsIgnoreCase(shutterOp)) {
+                        m_camera.incrementShutterSpeed();
+                    } else if ("dec".equalsIgnoreCase(shutterOp)) {
+                        m_camera.decrementShutterSpeed();
+                    }
 
-                if (isoVal != null) {
-                    Camera.Parameters params = m_camera.createEmptyParameters();
-                    m_camera.createParametersModifier(params).setISOSensitivity(isoVal);
-                    m_camera.getNormalCamera().setParameters(params);
-                    m_iso = isoVal;
+                    if (isoVal != null) {
+                        Camera.Parameters params = m_camera.createEmptyParameters();
+                        m_camera.createParametersModifier(params).setISOSensitivity(isoVal);
+                        m_camera.getNormalCamera().setParameters(params);
+                        m_iso = isoVal;
+                    }
+                    updateStatusText();
+                } catch (Throwable t) {
+                    Logger.error("adjustExposure error: " + t.toString());
                 }
-                updateStatusText();
             }
         });
     }
@@ -538,19 +675,34 @@ public class MacroServerActivity extends BaseActivity
         } else {
             speed = 1;
         }
-        m_camera.startOneShotFocusDrive(
-                m_curFocus < target ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
-                speed);
-        m_handler.postDelayed(m_checkFocusRunnable, 60);
+        try {
+            m_camera.startOneShotFocusDrive(
+                    m_curFocus < target ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
+                    speed);
+            m_handler.postDelayed(m_checkFocusRunnable, 60);
+        } catch (Throwable t) {
+            Logger.error("driveTowardTarget error: " + t.toString());
+            m_state = State.idle;
+            updateStatusText();
+        }
     }
 
     private void takePictureInternal() {
-        m_camera.burstableTakePicture();
+        try {
+            m_camera.burstableTakePicture();
+        } catch (Throwable t) {
+            Logger.error("takePictureInternal error: " + t.toString());
+            m_state = State.idle;
+            updateStatusText();
+        }
     }
 
     @Override
     public void onShutter(int i, CameraEx cameraEx) {
-        m_camera.cancelTakePicture();
+        try {
+            m_camera.cancelTakePicture();
+        } catch (Throwable ignored) {
+        }
         if (m_state == State.bracketing) {
             if (i == 0 && !m_focusQueue.isEmpty()) {
                 m_focusQueue.removeFirst();
