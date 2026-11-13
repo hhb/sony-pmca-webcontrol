@@ -11,7 +11,6 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.format.Formatter;
@@ -23,23 +22,9 @@ import android.widget.TextView;
 import com.github.ma1co.pmcademo.app.BaseActivity;
 import com.github.ma1co.pmcademo.app.Logger;
 import com.sony.scalar.hardware.CameraEx;
-import com.sony.scalar.hardware.CameraSequence;
-import com.sony.scalar.hardware.DeviceBuffer;
-import com.sony.scalar.hardware.DeviceMemory;
-import com.sony.scalar.sysutil.ScalarProperties;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -49,18 +34,17 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class MacroServerActivity extends BaseActivity implements SurfaceHolder.Callback {
 
-    private static final int LIVEVIEW_BUF_CAPACITY = 128 * 1024;
     public static final long MAIN_THREAD_TIMEOUT_MS = 3000L;
 
     private SurfaceHolder m_surfaceHolder;
     private CameraEx m_camera;
-    private CameraSequence m_cameraSequence;
     private CameraEx.AutoPictureReviewControl m_autoReviewControl;
     private int m_pictureReviewTime;
 
     private final Handler m_handler = new Handler(Looper.getMainLooper());
     private final CameraEventHub m_eventHub = new CameraEventHub();
     private final RpcDispatcher m_rpc = new RpcDispatcher();
+    private final LiveViewManager m_liveViewManager = new LiveViewManager();
 
     private FocusScaleView m_focusScaleView;
     private BatteryView m_batteryView;
@@ -81,31 +65,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private volatile int m_aperture = 0;
     private volatile String m_shutterSpeed = "--";
     private volatile int m_iso = 0;
-    private volatile int m_opticalZoom = 100;
     private volatile int m_digitalZoom = 100;
-    private volatile int m_previewMag = 0;
-
-    // Hardware LiveView / JPEG buffer (via Sony CameraSequence)
-    public static final int MAX_MJPEG_CLIENTS = 3;
-    private final Object m_frameLock = new Object();
-    private ByteBuffer m_liveviewByteBuf;
-    private byte[] m_latestJpeg;
-    private byte[] m_lastCapturedJpeg;
-    private long m_lastLiveviewFetchMs = 0;
-    private long m_frameSeq = 0;
-    private int m_mjpegClients = 0;
-    private volatile boolean m_liveviewRunning = false;
-    private Thread m_liveviewThread;
-
-    public static final class LiveViewFrame {
-        public final long seq;
-        public final byte[] jpeg;
-
-        public LiveViewFrame(long seq, byte[] jpeg) {
-            this.seq = seq;
-            this.jpeg = jpeg;
-        }
-    }
 
     public CameraEventHub getEventHub() {
         return m_eventHub;
@@ -117,6 +77,10 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
     public CameraEx getCameraEx() {
         return m_camera;
+    }
+
+    public LiveViewManager getLiveViewManager() {
+        return m_liveViewManager;
     }
 
     @Override
@@ -192,7 +156,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     m_camera.cancelTakePicture();
                 } catch (Throwable ignored) {
                 }
-                m_eventHub.setLastShutterStatus(status);
+                m_eventHub.setState("lastShutterStatus", status);
                 JSONObject data = new JSONObject();
                 try {
                     data.put("status", status);
@@ -207,7 +171,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setCaptureStatusListener(new CameraEx.OnCaptureStatusListener() {
                 @Override
                 public void onStart(int reason, CameraEx cameraEx) {
-                    m_eventHub.setCapturing(true);
+                    m_eventHub.setState("capturing", true);
                     JSONObject data = new JSONObject();
                     try {
                         data.put("capturing", true);
@@ -219,7 +183,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
                 @Override
                 public void onEnd(int reason, int arg1, CameraEx cameraEx) {
-                    m_eventHub.setCapturing(false);
+                    m_eventHub.setState("capturing", false);
                     JSONObject data = new JSONObject();
                     try {
                         data.put("capturing", false);
@@ -236,10 +200,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             @Override
             public void onPictureTaken(byte[] data, CameraEx cameraEx) {
                 if (data != null) {
-                    synchronized (m_frameLock) {
-                        m_latestJpeg = data;
-                        m_lastCapturedJpeg = data;
-                    }
+                    m_liveViewManager.onPictureJpeg(data);
                     JSONObject ev = new JSONObject();
                     try {
                         ev.put("size", data.length);
@@ -266,7 +227,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                         }
                     } catch (Throwable ignored) {
                     }
-                    m_eventHub.updateLastStoreImage(data);
+                    m_eventHub.setState("lastStoreImage", data);
                     m_eventHub.emit("StoreImageComplete", data);
                 }
             });
@@ -288,7 +249,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     data.put("maxPosition", m_maxFocus);
                 } catch (Throwable ignored) {
                 }
-                m_eventHub.updateFocus(data);
+                m_eventHub.setState("focus", data);
                 m_eventHub.emit("FocusDrive", data);
                 updateStatusText();
             }
@@ -328,7 +289,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     data.put("currentAvailableMax", info.currentAvailableMax);
                 } catch (Throwable ignored) {
                 }
-                m_eventHub.updateAperture(data);
+                m_eventHub.setState("aperture", data);
                 m_eventHub.emit("ApertureChange", data);
                 updateStatusText();
             }
@@ -349,7 +310,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     data.put("currentAvailableMax_d", info.currentAvailableMax_d);
                 } catch (Throwable ignored) {
                 }
-                m_eventHub.updateShutter(data);
+                m_eventHub.setState("shutter", data);
                 m_eventHub.emit("ShutterSpeedChange", data);
                 updateStatusText();
             }
@@ -359,7 +320,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setAutoISOSensitivityListener(new CameraEx.AutoISOSensitivityListener() {
                 @Override
                 public void onChanged(int iso, CameraEx cameraEx) {
-                    m_eventHub.setAutoIso(iso);
+                    m_eventHub.setState("autoIso", iso);
                     JSONObject data = new JSONObject();
                     try {
                         data.put("iso", iso);
@@ -376,7 +337,6 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 @Override
                 public void onChanged(CameraEx.ZoomInfo info, CameraEx cameraEx) {
                     if (info == null) return;
-                    if (info.opticalMagnification > 0) m_opticalZoom = info.opticalMagnification;
                     if (info.digitalMagnification > 0) m_digitalZoom = info.digitalMagnification;
                     JSONObject data = new JSONObject();
                     try {
@@ -388,7 +348,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                         data.put("stopped", info.stopped);
                     } catch (Throwable ignored) {
                     }
-                    m_eventHub.updateZoom(data);
+                    m_eventHub.setState("zoom", data);
                     m_eventHub.emit("ZoomChange", data);
                     updateStatusText();
                 }
@@ -400,7 +360,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setFocalLengthChangeListener(new CameraEx.FocalLengthChangeListener() {
                 @Override
                 public void onFocalLengthChanged(int fl, CameraEx cameraEx) {
-                    m_eventHub.setFocalLength(fl);
+                    m_eventHub.setState("focalLength", fl);
                     JSONObject data = new JSONObject();
                     try {
                         data.put("focalLength", fl);
@@ -416,7 +376,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setPowerZoomListener(new CameraEx.PowerZoomListener() {
                 @Override
                 public void onChanged(int status, CameraEx cameraEx) {
-                    m_eventHub.setPowerZoom(status);
+                    m_eventHub.setState("powerZoom", status);
                     JSONObject data = new JSONObject();
                     try {
                         data.put("status", status);
@@ -432,7 +392,6 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setPreviewMagnificationListener(new CameraEx.PreviewMagnificationListener() {
                 @Override
                 public void onChanged(boolean enabled, int ratio, int arg2, Pair pos, CameraEx cameraEx) {
-                    m_previewMag = enabled ? ratio : 0;
                     JSONObject data = new JSONObject();
                     try {
                         data.put("enabled", enabled);
@@ -440,7 +399,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                         data.put("pos", RpcDispatcher.toJsonValue(pos));
                     } catch (Throwable ignored) {
                     }
-                    m_eventHub.updatePreviewMag(data);
+                    m_eventHub.setState("previewMagnification", data);
                     m_eventHub.emit("PreviewMagnification", data);
                 }
 
@@ -471,7 +430,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                             ecObj.put("step", (double) params.getExposureCompensationStep());
                             ecObj.put("min", params.getMinExposureCompensation());
                             ecObj.put("max", params.getMaxExposureCompensation());
-                            m_eventHub.updateExposureCompensation(ecObj);
+                            m_eventHub.setState("exposureCompensation", ecObj);
                         }
                     } catch (Throwable ignored) {
                     }
@@ -492,7 +451,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 @Override
                 public void onEquipmentChange(int deviceType, int status, CameraEx cameraEx) {
                     if (deviceType == CameraEx.EquipmentCallback.DEVICE_TYPE_LENS) {
-                        m_eventHub.setLensInfo(buildLensInfoJson());
+                        m_eventHub.setState("lens", buildLensInfoJson());
                     }
                     JSONObject data = new JSONObject();
                     try {
@@ -566,7 +525,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         }
         setAutoPowerOffMode(true);
 
-        stopLiveviewSequence();
+        m_liveViewManager.stop();
 
         if (m_camera != null) {
             m_surfaceHolder.removeCallback(this);
@@ -623,7 +582,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     }
 
     private void refreshInitialState() {
-        m_eventHub.setLensInfo(buildLensInfoJson());
+        m_eventHub.setState("lens", buildLensInfoJson());
         try {
             Camera.Parameters params = m_camera.getNormalCamera().getParameters();
             CameraEx.ParametersModifier mod = m_camera.createParametersModifier(params);
@@ -632,7 +591,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 if (m_aperture > 0) {
                     JSONObject ap = new JSONObject();
                     ap.put("currentAperture", m_aperture);
-                    m_eventHub.updateAperture(ap);
+                    m_eventHub.setState("aperture", ap);
                 }
             } catch (Throwable ignored) {
             }
@@ -645,7 +604,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     JSONObject ssObj = new JSONObject();
                     ssObj.put("currentShutterSpeed_n", n);
                     ssObj.put("currentShutterSpeed_d", d);
-                    m_eventHub.updateShutter(ssObj);
+                    m_eventHub.setState("shutter", ssObj);
                 }
             } catch (Throwable ignored) {
             }
@@ -660,7 +619,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 ecObj.put("step", (double) params.getExposureCompensationStep());
                 ecObj.put("min", params.getMinExposureCompensation());
                 ecObj.put("max", params.getMaxExposureCompensation());
-                m_eventHub.updateExposureCompensation(ecObj);
+                m_eventHub.setState("exposureCompensation", ecObj);
             } catch (Throwable ignored) {
             }
         } catch (Throwable ignored) {
@@ -784,413 +743,6 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         return new JSONObject();
     }
 
-    // --- Raw Camera.Parameters Access ---
-
-    public JSONObject getRawParamsJson() {
-        JSONObject map = new JSONObject();
-        if (m_camera == null) return map;
-        String flat = m_camera.getNormalCamera().getParameters().flatten();
-        if (flat != null) {
-            String[] pairs = flat.split(";");
-            for (String p : pairs) {
-                int eq = p.indexOf('=');
-                if (eq > 0) {
-                    String k = p.substring(0, eq);
-                    String v = p.substring(eq + 1);
-                    try {
-                        map.put(k, v);
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }
-        }
-        return map;
-    }
-
-    public void setRawParams(JSONObject updates) throws Exception {
-        if (m_camera == null) throw new IllegalStateException("Camera not open");
-        Camera.Parameters params = m_camera.createEmptyParameters();
-        Iterator<String> it = updates.keys();
-        while (it.hasNext()) {
-            String k = it.next();
-            String v = String.valueOf(updates.get(k));
-            params.set(k, v);
-        }
-        m_camera.getNormalCamera().setParameters(params);
-    }
-
-    // --- Hardware LiveView Sequence (Sony CameraSequence API) ---
-
-    private void startLiveviewSequence() {
-        if (m_camera == null || m_cameraSequence != null) {
-            return;
-        }
-        synchronized (m_frameLock) {
-            try {
-                m_cameraSequence = CameraSequence.open(m_camera);
-                if (m_cameraSequence != null) {
-                    CameraSequence.Options opts = new CameraSequence.Options();
-                    opts.setOption("MEMORY_MAP_FILE", getLibPath("lib_memorymap.so"));
-                    opts.setOption("EXPOSURE_COUNT", 1);
-                    opts.setOption("RECORD_COUNT", 1);
-                    opts.setOption("INTERIM_PRE_REVIEW_ENABLED", false);
-                    opts.setOption("AUTO_RELEASE_LOCK_ENABLED", false);
-                    opts.setOption("PREVIEW_FRAME_RATE", 30000);
-                    opts.setOption("PREVIEW_FRAME_WIDTH", 640);
-                    opts.setOption("PREVIEW_FRAME_HEIGHT", 0);
-                    m_cameraSequence.setReleaseLock(false);
-                    m_cameraSequence.startPreviewSequence(opts);
-                    m_liveviewRunning = true;
-                    m_liveviewThread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            runLiveviewProducer();
-                        }
-                    }, "LiveviewProducer");
-                    m_liveviewThread.start();
-                    Logger.info("CameraSequence LiveView started (640px JPEG)");
-                }
-            } catch (Throwable t) {
-                Logger.error("startLiveviewSequence error: " + t.toString());
-                m_cameraSequence = null;
-            }
-        }
-    }
-
-    private void stopLiveviewSequence() {
-        Thread threadToJoin;
-        synchronized (m_frameLock) {
-            m_liveviewRunning = false;
-            threadToJoin = m_liveviewThread;
-            m_liveviewThread = null;
-            m_frameLock.notifyAll();
-            if (m_cameraSequence != null) {
-                try {
-                    m_cameraSequence.stopPreviewSequence();
-                } catch (Throwable ignored) {
-                }
-                try {
-                    m_cameraSequence.release();
-                } catch (Throwable ignored) {
-                }
-                m_cameraSequence = null;
-            }
-        }
-        if (threadToJoin != null && threadToJoin != Thread.currentThread()) {
-            try {
-                threadToJoin.join(300);
-            } catch (InterruptedException ignored) {
-            }
-        }
-    }
-
-    private String getLibPath(String libName) {
-        return "/data/data/" + getPackageName() + "/lib/" + libName;
-    }
-
-    private void runLiveviewProducer() {
-        while (m_liveviewRunning) {
-            long intervalMs;
-            synchronized (m_frameLock) {
-                while (m_liveviewRunning && m_mjpegClients <= 0) {
-                    try {
-                        m_frameLock.wait(500);
-                    } catch (InterruptedException ignored) {
-                    }
-                }
-                if (!m_liveviewRunning || m_cameraSequence == null) {
-                    break;
-                }
-                if (m_mjpegClients <= 1) {
-                    intervalMs = 33;
-                } else if (m_mjpegClients == 2) {
-                    intervalMs = 50;
-                } else {
-                    intervalMs = 85;
-                }
-                fetchPreviewFrameLocked(intervalMs);
-            }
-            try {
-                Thread.sleep(intervalMs);
-            } catch (InterruptedException ignored) {
-            }
-        }
-    }
-
-    private void fetchPreviewFrameLocked(long minIntervalMs) {
-        long now = System.currentTimeMillis();
-        if (m_cameraSequence == null || (now - m_lastLiveviewFetchMs) < minIntervalMs) {
-            return;
-        }
-        DeviceMemory[] frames = null;
-        try {
-            frames = m_cameraSequence.getPreviewSequenceFrames(1);
-            if (frames != null && frames.length > 0 && frames[0] != null) {
-                DeviceBuffer buf = (DeviceBuffer) frames[0];
-                if (m_liveviewByteBuf == null) {
-                    m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
-                }
-                m_liveviewByteBuf.clear();
-                int size = buf.read(m_liveviewByteBuf);
-                if (size > 0 && size <= LIVEVIEW_BUF_CAPACITY) {
-                    byte[] jpeg = new byte[size];
-                    m_liveviewByteBuf.rewind();
-                    m_liveviewByteBuf.get(jpeg, 0, size);
-                    m_latestJpeg = jpeg;
-                    m_lastLiveviewFetchMs = now;
-                    m_frameSeq++;
-                    m_frameLock.notifyAll();
-                }
-            }
-        } catch (Throwable t) {
-            Logger.error("getPreviewSequenceFrames error: " + t.toString());
-        } finally {
-            if (frames != null) {
-                for (DeviceMemory dm : frames) {
-                    if (dm != null) {
-                        try {
-                            dm.release();
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    public boolean tryAcquireMjpegClient() {
-        synchronized (m_frameLock) {
-            if (m_mjpegClients >= MAX_MJPEG_CLIENTS) {
-                return false;
-            }
-            m_mjpegClients++;
-            m_frameLock.notifyAll();
-            return true;
-        }
-    }
-
-    public void releaseMjpegClient() {
-        synchronized (m_frameLock) {
-            if (m_mjpegClients > 0) {
-                m_mjpegClients--;
-            }
-            m_frameLock.notifyAll();
-        }
-    }
-
-    public LiveViewFrame waitForNextLiveViewFrame(long lastSeq, long timeoutMs) {
-        synchronized (m_frameLock) {
-            if (m_latestJpeg == null && m_cameraSequence != null) {
-                fetchPreviewFrameLocked(0);
-            }
-            long deadline = System.currentTimeMillis() + timeoutMs;
-            while (m_liveviewRunning && m_frameSeq == lastSeq) {
-                long remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0) {
-                    break;
-                }
-                try {
-                    m_frameLock.wait(remaining);
-                } catch (InterruptedException ignored) {
-                    break;
-                }
-            }
-            if (!m_liveviewRunning || m_latestJpeg == null) {
-                return null;
-            }
-            return new LiveViewFrame(m_frameSeq, m_latestJpeg);
-        }
-    }
-
-    public byte[] getLatestLiveViewJpeg() {
-        synchronized (m_frameLock) {
-            fetchPreviewFrameLocked(33);
-            return m_latestJpeg;
-        }
-    }
-
-    public byte[] getLastCapturedJpeg() {
-        synchronized (m_frameLock) {
-            return m_lastCapturedJpeg;
-        }
-    }
-
-    public File resolveSdDir(String relDir) {
-        File external = Environment.getExternalStorageDirectory();
-        File dcim = new File(external, "DCIM");
-        File baseRoot = (dcim.exists() && dcim.isDirectory()) ? dcim : external;
-        if (relDir == null || relDir.trim().isEmpty() || "/".equals(relDir.trim())) {
-            return baseRoot;
-        }
-        String clean = relDir.trim().replace("\\", "/");
-        while (clean.startsWith("/")) clean = clean.substring(1);
-        if (clean.contains("..")) {
-            return baseRoot;
-        }
-        if (clean.startsWith("DCIM/")) {
-            clean = clean.substring("DCIM/".length());
-        } else if ("DCIM".equals(clean)) {
-            return baseRoot;
-        }
-        File target = clean.isEmpty() ? baseRoot : new File(baseRoot, clean);
-        return target;
-    }
-
-    public JSONObject listPhotoDirectory(String relDir, int limit) {
-        JSONObject out = new JSONObject();
-        JSONArray dirsArr = new JSONArray();
-        JSONArray photosArr = new JSONArray();
-        try {
-            File external = Environment.getExternalStorageDirectory();
-            File dcim = new File(external, "DCIM");
-            File baseRoot = (dcim.exists() && dcim.isDirectory()) ? dcim : external;
-            File target = resolveSdDir(relDir);
-
-            List<File> subDirs = new ArrayList<File>();
-            List<File> subPhotos = new ArrayList<File>();
-            File[] entries = target.listFiles();
-            if (entries != null) {
-                for (File f : entries) {
-                    if (f.isDirectory()) {
-                        subDirs.add(f);
-                    } else if (f.isFile()) {
-                        String name = f.getName().toLowerCase();
-                        if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".arw")) {
-                            subPhotos.add(f);
-                        }
-                    }
-                }
-            }
-
-            Comparator<File> nameDesc = new Comparator<File>() {
-                @Override
-                public int compare(File a, File b) {
-                    return b.getName().compareToIgnoreCase(a.getName());
-                }
-            };
-            Collections.sort(subDirs, nameDesc);
-            Collections.sort(subPhotos, nameDesc);
-
-            for (File d : subDirs) {
-                JSONObject item = new JSONObject();
-                item.put("name", d.getName());
-                item.put("path", toRelativeDcimPath(baseRoot, d));
-                dirsArr.put(item);
-            }
-
-            int maxPhotos = (limit > 0 && subPhotos.size() > limit) ? limit : subPhotos.size();
-            for (int i = 0; i < maxPhotos; i++) {
-                File f = subPhotos.get(i);
-                JSONObject item = new JSONObject();
-                item.put("name", f.getName());
-                item.put("path", f.getAbsolutePath().replace("\\", "/"));
-                item.put("size", f.length());
-                photosArr.put(item);
-            }
-
-            out.put("ok", true);
-            out.put("dir", toRelativeDcimPath(baseRoot, target));
-            out.put("totalPhotosInDir", subPhotos.size());
-            out.put("dirs", dirsArr);
-            out.put("photos", photosArr);
-        } catch (Throwable t) {
-            Logger.error("listPhotoDirectory error: " + t.toString());
-            try {
-                out.put("ok", false);
-                out.put("error", t.toString());
-            } catch (Throwable ignored) {
-            }
-        }
-        return out;
-    }
-
-    private static String toRelativeDcimPath(File baseRoot, File target) {
-        String rootPath = baseRoot.getAbsolutePath();
-        String targetPath = target.getAbsolutePath();
-        if (targetPath.equals(rootPath)) {
-            return "";
-        }
-        if (targetPath.startsWith(rootPath + "/")) {
-            return targetPath.substring(rootPath.length() + 1);
-        }
-        return target.getName();
-    }
-
-    public File getLatestPhotoFile() {
-        try {
-            File root = resolveSdDir(null);
-            File[] entries = root.listFiles();
-            if (entries == null) return null;
-
-            List<File> subDirs = new ArrayList<File>();
-            List<File> directPhotos = new ArrayList<File>();
-            for (File f : entries) {
-                if (f.isDirectory()) {
-                    subDirs.add(f);
-                } else if (f.isFile()) {
-                    String name = f.getName().toLowerCase();
-                    if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".arw")) {
-                        directPhotos.add(f);
-                    }
-                }
-            }
-            Comparator<File> nameDesc = new Comparator<File>() {
-                @Override
-                public int compare(File a, File b) {
-                    return b.getName().compareToIgnoreCase(a.getName());
-                }
-            };
-            Collections.sort(subDirs, nameDesc);
-            for (File d : subDirs) {
-                File[] files = d.listFiles();
-                if (files == null) continue;
-                File best = null;
-                for (File f : files) {
-                    if (!f.isFile()) continue;
-                    String name = f.getName().toLowerCase();
-                    if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".arw")) {
-                        if (best == null || f.getName().compareToIgnoreCase(best.getName()) > 0) {
-                            best = f;
-                        }
-                    }
-                }
-                if (best != null) return best;
-            }
-            if (!directPhotos.isEmpty()) {
-                Collections.sort(directPhotos, nameDesc);
-                return directPhotos.get(0);
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
-    }
-
-    public String getCrashLogText() {
-        File f = Logger.getFile();
-        if (!f.exists()) {
-            return "Log file does not exist yet: " + f.getAbsolutePath();
-        }
-        StringBuilder sb = new StringBuilder();
-        BufferedReader br = null;
-        try {
-            br = new BufferedReader(new FileReader(f));
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-        } catch (Throwable t) {
-            sb.append("Error reading log: ").append(t.toString());
-        } finally {
-            if (br != null) {
-                try {
-                    br.close();
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        return sb.toString();
-    }
-
     // --- SurfaceHolder.Callback ---
 
     @Override
@@ -1199,7 +751,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             Camera cam = m_camera.getNormalCamera();
             cam.setPreviewDisplay(holder);
             cam.startPreview();
-            startLiveviewSequence();
+            m_liveViewManager.start(m_camera, "/data/data/" + getPackageName() + "/lib/lib_memorymap.so");
         } catch (Throwable t) {
             Logger.error("surfaceCreated error: " + t.toString());
         }
@@ -1211,7 +763,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        stopLiveviewSequence();
+        m_liveViewManager.stop();
     }
 
     // --- Physical Camera Keys ---

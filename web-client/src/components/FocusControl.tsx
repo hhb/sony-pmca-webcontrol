@@ -12,7 +12,6 @@ interface FocusControlProps {
   client: CameraClient;
   state: CameraState | null;
   connected: boolean;
-  onRefresh: () => void;
   onError: (msg: string) => void;
 }
 
@@ -20,10 +19,10 @@ export function FocusControl({
   client,
   state,
   connected,
-  onRefresh,
   onError,
 }: FocusControlProps) {
   const [busy, setBusy] = useState(false);
+  const [stackRunning, setStackRunning] = useState(false);
   const [startPos, setStartPos] = useState<string>('');
   const [endPos, setEndPos] = useState<string>('');
   const [steps, setSteps] = useState<number>(5);
@@ -42,7 +41,6 @@ export function FocusControl({
     setBusy(true);
     try {
       await client.focusStep(dir, speed);
-      onRefresh();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -54,7 +52,6 @@ export function FocusControl({
     setBusy(true);
     try {
       await client.zoomStep(dir, 1);
-      onRefresh();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -72,6 +69,7 @@ export function FocusControl({
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
+    setStackRunning(true);
     setStackStatus('Starting focus stack...');
     try {
       await client.runFocusStack(
@@ -85,7 +83,6 @@ export function FocusControl({
         controller.signal,
       );
       setStackStatus('Focus stack complete');
-      onRefresh();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setStackStatus('Focus stack aborted');
@@ -96,6 +93,7 @@ export function FocusControl({
       }
     } finally {
       abortRef.current = null;
+      setStackRunning(false);
       setBusy(false);
     }
   };
@@ -265,7 +263,7 @@ export function FocusControl({
 
         <div className="stack-actions">
           {stackStatus && <span className="muted-tag" style={{ marginRight: 'auto' }}>{stackStatus}</span>}
-          {!abortRef.current ? (
+          {!stackRunning ? (
             <button
               type="button"
               className="btn btn-primary btn-sm"

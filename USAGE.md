@@ -45,7 +45,8 @@ All RPC calls run on the Android main thread with a **3000 ms timeout** (returni
 * `GET  /api/describe` — Introspect all callable targets, method names, and signatures
 * `GET  /api/state` — Latest cached snapshots from all `CameraEx` listeners + `seq`
 * `GET  /api/events` — Long-polling callback event stream
-* `GET  /api/liveview.jpg` — 640px JPEG live preview frame
+* `GET  /api/liveview.mjpeg` — Adaptive `multipart/x-mixed-replace` 640px JPEG stream (up to 3 concurrent clients)
+* `GET  /api/liveview.jpg` — Single latest 640px JPEG live preview frame
 * `GET  /api/photos`, `/api/photos/latest`, `/api/photos/download` — SD card listing & downloads
 * `GET  /api/log` — Plain-text camera debug/crash log
 
@@ -174,6 +175,7 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 
 ### 4. LiveView & Photo Downloads
 
+* **`GET /api/liveview.mjpeg`**: Continuous `multipart/x-mixed-replace` 640px hardware JPEG stream from `CameraSequence` (supports up to 3 concurrent clients; returns `503` if busy).
 * **`GET /api/liveview.jpg`**: Latest 640px hardware JPEG frame from `CameraSequence`.
 * **`GET /api/photos?dir=<relPath>&limit=100`**: Non-recursive directory listing under `DCIM` (sorted newest/name descending). Omit `dir` to list `DCIM` folders (e.g. `100MSDCF`, `101MSDCF`); pass `?dir=100MSDCF` to list photos in that folder. Returns `{ dir, totalPhotosInDir, dirs: [...], photos: [...] }`.
 * **`GET /api/photos/latest`**: Downloads the latest captured JPEG (from in-memory capture buffer or SD card).
@@ -184,21 +186,24 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 
 ## Part 3: Web Client (`web-client/`)
 
-The React + TypeScript + Vite web frontend wraps `/api/call`, `/api/describe`, `/api/state`, `/api/events`, `/api/liveview.jpg`, and `/api/photos` in `web-client/src/api/cameraClient.ts`:
+The React + TypeScript + Vite web frontend wraps `/api/call`, `/api/describe`, `/api/state`, `/api/events`, `/api/liveview.mjpeg`, and `/api/photos` in `web-client/src/api/cameraClient.ts`:
 
 ```bash
 cd web-client
 npm install
-npm run dev       # Local dev server (http://localhost:5173)
+npm run dev       # Local HTTPS dev server (required for showDirectoryPicker)
 npm run build     # Outputs single self-contained web-client/dist/index.html
 ```
 
-Features included in the initial web UI:
-* **LiveView**: Canvas-based `/api/liveview.jpg` stream with client-side Focus Peaking, rule-of-thirds grid, and live luma histogram.
-* **Exposure & Capture**: Real-time aperture, shutter speed, ISO controls, and shutter release.
+Features included in the web UI:
+* **LiveView**: Canvas-based `/api/liveview.mjpeg` stream with client-side Focus Peaking, rule-of-thirds grid, live luma histogram, and 2x–4x click-to-magnify Focus Loupe.
+* **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and shutter release.
 * **Focus & Stacking**: Multi-speed manual focus stepping (`startOneShotFocusDrive`), power zoom, and client-side closed-loop focus bracketing.
+* **Auto-Save**: Automatically downloads newly captured photos to a chosen local directory (via File System Access API) or browser downloads.
 * **Photo Browser**: Non-recursive SD card directory navigation (`/api/photos?dir=...`), preview modal, and download.
 * **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
+
+> **Note**: Opening `http://<camera-ip>:8080` directly in a browser serves a lightweight built-in fallback page (`camera-app/app/src/main/assets/index.html`) for quick testing without running `web-client/`.
 
 ---
 

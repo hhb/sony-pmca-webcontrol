@@ -20,6 +20,62 @@ import { RpcInspector } from './components/RpcInspector';
 
 type TabKey = 'control' | 'photos' | 'rpc';
 
+function applyEventsToState(
+  prev: CameraState | null,
+  events: CameraEvent[],
+): { next: CameraState | null; needFullRefresh: boolean } {
+  let needFullRefresh = false;
+  if (!prev) {
+    return { next: prev, needFullRefresh: true };
+  }
+  const next: CameraState = { ...prev };
+  for (const ev of events) {
+    const d = ev.data ?? {};
+    switch (ev.type) {
+      case 'FocusDrive':
+        next.focus = d as CameraState['focus'];
+        break;
+      case 'ApertureChange':
+        next.aperture = d as CameraState['aperture'];
+        break;
+      case 'ShutterSpeedChange':
+        next.shutter = d as CameraState['shutter'];
+        break;
+      case 'AutoISOSensitivity':
+        if (typeof d.iso === 'number') next.autoIso = d.iso;
+        break;
+      case 'ZoomChange':
+        next.zoom = d as CameraState['zoom'];
+        break;
+      case 'FocalLengthChange':
+        if (typeof d.focalLength === 'number') next.focalLength = d.focalLength;
+        break;
+      case 'PowerZoom':
+        if (typeof d.status === 'number') next.powerZoom = d.status;
+        break;
+      case 'PreviewMagnification':
+        next.previewMagnification = d as CameraState['previewMagnification'];
+        break;
+      case 'CaptureStart':
+      case 'CaptureEnd':
+        if (typeof d.capturing === 'boolean') next.capturing = d.capturing;
+        break;
+      case 'Shutter':
+        if (typeof d.status === 'number') next.lastShutterStatus = d.status;
+        break;
+      case 'StoreImageComplete':
+        next.lastStoreImage = d as CameraState['lastStoreImage'];
+        break;
+      case 'SettingChanged':
+      case 'EquipmentChange':
+        needFullRefresh = true;
+        break;
+    }
+    next.seq = Math.max(next.seq ?? 0, ev.seq);
+  }
+  return { next, needFullRefresh };
+}
+
 export function App() {
   const [urlInput, setUrlInput] = useState<string>(() => getDefaultCameraUrl());
   const [activeUrl, setActiveUrl] = useState<string>(() => getDefaultCameraUrl());
@@ -130,8 +186,12 @@ export function App() {
         const dirName = typeof ev.data?.DirectoryName === 'string' ? ev.data.DirectoryName : '';
         const rawFileName = typeof ev.data?.FileName === 'string' ? ev.data.FileName : '';
         if (rawFileName) {
-          if (handledFilesRef.current.has(rawFileName)) return;
-          handledFilesRef.current.add(rawFileName);
+          const dedupKey = dirName ? `${dirName}/${rawFileName}` : rawFileName;
+          if (handledFilesRef.current.has(dedupKey)) return;
+          if (handledFilesRef.current.size > 500) {
+            handledFilesRef.current.clear();
+          }
+          handledFilesRef.current.add(dedupKey);
 
           // Direct path avoids slow SD directory scan (which stalls on cards with thousands of files)
           const filePath = dirName ? `/mnt/sdcard/DCIM/${dirName}/${rawFileName}` : rawFileName;
@@ -190,13 +250,21 @@ export function App() {
           }
           if (res.events && res.events.length > 0) {
             setEvents((prev) => [...res.events.slice().reverse(), ...prev].slice(0, 30));
+            let needFullRefresh = false;
+            setState((prev) => {
+              const applied = applyEventsToState(prev, res.events);
+              needFullRefresh = applied.needFullRefresh;
+              return applied.next;
+            });
             for (const ev of res.events) {
               if (ev.type === 'Jpeg' || ev.type === 'StoreImageComplete') {
                 handleCaptureEvent(ev);
               }
             }
-            const s = await client.getState();
-            if (!cancelled) setState(s);
+            if (needFullRefresh) {
+              const s = await client.getState();
+              if (!cancelled) setState(s);
+            }
           }
         } catch (err) {
           if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -228,7 +296,6 @@ export function App() {
   const handleCapture = async () => {
     try {
       await client.takePicture();
-      await refreshState();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     }
@@ -315,14 +382,12 @@ export function App() {
                 client={client}
                 state={state}
                 connected={connected}
-                onRefresh={refreshState}
                 onError={setErrorMsg}
               />
               <FocusControl
                 client={client}
                 state={state}
                 connected={connected}
-                onRefresh={refreshState}
                 onError={setErrorMsg}
               />
               <AutoSavePanel

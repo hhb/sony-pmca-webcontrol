@@ -61,7 +61,6 @@ public class RpcDispatcher {
     private final Map<String, List<Method>> m_cameraMethods = new HashMap<String, List<Method>>();
     private final Map<String, List<Method>> m_modifierMethods = new HashMap<String, List<Method>>();
     private final Map<String, List<Method>> m_paramsMethods = new HashMap<String, List<Method>>();
-    private final Map<String, Class<?>> m_staticClasses = new HashMap<String, Class<?>>();
     private final Map<String, Map<String, List<Method>>> m_staticMethods = new HashMap<String, Map<String, List<Method>>>();
 
     public RpcDispatcher() {
@@ -103,7 +102,6 @@ public class RpcDispatcher {
     }
 
     private void registerStaticClass(String targetKey, Class<?> cls, Set<String> allowList) {
-        m_staticClasses.put(targetKey, cls);
         Map<String, List<Method>> map = new HashMap<String, List<Method>>();
         for (Method m : cls.getDeclaredMethods()) {
             if (!Modifier.isPublic(m.getModifiers()) || !Modifier.isStatic(m.getModifiers())) continue;

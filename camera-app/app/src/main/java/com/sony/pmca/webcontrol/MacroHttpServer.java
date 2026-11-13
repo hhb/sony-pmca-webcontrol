@@ -2,7 +2,6 @@ package com.sony.pmca.webcontrol;
 
 import com.sony.scalar.hardware.CameraEx;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
@@ -12,8 +11,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeoutException;
@@ -108,14 +105,14 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/liveview.mjpeg".equals(uri)) {
-                if (!m_activity.tryAcquireMjpegClient()) {
+                if (!m_activity.getLiveViewManager().tryAcquireMjpegClient()) {
                     return addCors(new Response(STATUS_SERVICE_UNAVAILABLE, MIME_PLAINTEXT, "Too many LiveView clients"));
                 }
                 return new MjpegStreamResponse();
             }
 
             if ("/api/liveview.jpg".equals(uri)) {
-                byte[] jpeg = m_activity.getLatestLiveViewJpeg();
+                byte[] jpeg = m_activity.getLiveViewManager().getLatestLiveViewJpeg();
                 if (jpeg == null) {
                     return addCors(new Response(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "No preview frame yet"));
                 }
@@ -125,13 +122,13 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/photos/latest".equals(uri) || "/api/capture/last.jpg".equals(uri)) {
-                byte[] inMem = m_activity.getLastCapturedJpeg();
+                byte[] inMem = m_activity.getLiveViewManager().getLastCapturedJpeg();
                 if (inMem != null && inMem.length > 0) {
                     Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(inMem));
                     res.addHeader("Content-Disposition", "attachment; filename=\"latest_capture.jpg\"");
                     return addCors(res);
                 }
-                File latest = m_activity.getLatestPhotoFile();
+                File latest = PhotoStorageHelper.getLatestPhotoFile();
                 if (latest != null && latest.exists() && latest.isFile()) {
                     return serveFileDownload(latest);
                 }
@@ -141,7 +138,7 @@ public class MacroHttpServer extends NanoHTTPD {
             if ("/api/photos".equals(uri)) {
                 int limit = parseInt(params.get("limit"), 100);
                 String dir = params.get("dir");
-                JSONObject root = m_activity.listPhotoDirectory(dir, limit);
+                JSONObject root = PhotoStorageHelper.listPhotoDirectory(dir, limit);
                 return jsonOk(root.toString());
             }
 
@@ -150,7 +147,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 if (path == null || path.trim().isEmpty()) {
                     path = params.get("file");
                 }
-                File target = (path != null && !path.trim().isEmpty()) ? new File(path.trim()) : m_activity.getLatestPhotoFile();
+                File target = (path != null && !path.trim().isEmpty()) ? new File(path.trim()) : PhotoStorageHelper.getLatestPhotoFile();
                 if (target == null || !target.exists() || !target.isFile()) {
                     return jsonError(Response.Status.NOT_FOUND, "Photo file not found");
                 }
@@ -158,7 +155,7 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/log".equals(uri)) {
-                return addCors(new Response(Response.Status.OK, MIME_PLAINTEXT, m_activity.getCrashLogText()));
+                return addCors(new Response(Response.Status.OK, MIME_PLAINTEXT, PhotoStorageHelper.getCrashLogText()));
             }
 
             return jsonError(Response.Status.NOT_FOUND, "Unknown endpoint: " + uri);
@@ -253,12 +250,13 @@ public class MacroHttpServer extends NanoHTTPD {
                 outputStream.flush();
 
                 long lastSeq = -1;
+                LiveViewManager liveView = m_activity.getLiveViewManager();
                 while (true) {
-                    MacroServerActivity.LiveViewFrame frame = m_activity.waitForNextLiveViewFrame(lastSeq, 2000);
+                    LiveViewManager.LiveViewFrame frame = liveView.waitForNextFrame(lastSeq, 2000);
                     if (frame == null) {
                         break;
                     }
-                    if (frame.seq == lastSeq) {
+                    if (frame.jpeg == null || frame.seq == lastSeq) {
                         continue;
                     }
                     lastSeq = frame.seq;
@@ -273,7 +271,7 @@ public class MacroHttpServer extends NanoHTTPD {
             } catch (IOException ignored) {
                 // Client disconnected
             } finally {
-                m_activity.releaseMjpegClient();
+                m_activity.getLiveViewManager().releaseMjpegClient();
             }
         }
     }

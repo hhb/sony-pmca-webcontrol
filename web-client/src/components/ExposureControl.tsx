@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
-  type ExposureCompensationInfo,
   formatAperture,
   formatEv,
   formatShutter,
@@ -12,7 +11,6 @@ interface ExposureControlProps {
   client: CameraClient;
   state: CameraState | null;
   connected: boolean;
-  onRefresh: () => void;
   onError: (msg: string) => void;
 }
 
@@ -22,61 +20,25 @@ export function ExposureControl({
   client,
   state,
   connected,
-  onRefresh,
   onError,
 }: ExposureControlProps) {
   const [busy, setBusy] = useState(false);
-  const [localEv, setLocalEv] = useState<ExposureCompensationInfo>({
-    index: 0,
-    min: -9,
-    max: 9,
-    step: 1 / 3,
-  });
 
-  // Keep in sync with state if state provides exposureCompensation
-  const stateEvIndex =
+  const ec = typeof state?.exposureCompensation === 'object' ? state.exposureCompensation : undefined;
+  const evIndex =
     typeof state?.exposureCompensation === 'number'
       ? state.exposureCompensation
-      : typeof state?.exposureCompensation?.index === 'number'
-        ? state.exposureCompensation.index
-        : undefined;
-
-  const evIndex = stateEvIndex ?? localEv.index;
-  const evMin =
-    typeof state?.exposureCompensation === 'object' &&
-    typeof state?.exposureCompensation?.min === 'number'
-      ? state.exposureCompensation.min
-      : localEv.min;
-  const evMax =
-    typeof state?.exposureCompensation === 'object' &&
-    typeof state?.exposureCompensation?.max === 'number'
-      ? state.exposureCompensation.max
-      : localEv.max;
-  const evStep =
-    typeof state?.exposureCompensation === 'object' &&
-    typeof state?.exposureCompensation?.step === 'number'
-      ? state.exposureCompensation.step
-      : localEv.step;
-
-  useEffect(() => {
-    if (!connected) return;
-    let active = true;
-    client
-      .getExposureCompensationInfo()
-      .then((info) => {
-        if (active) setLocalEv(info);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [client, connected]);
+      : typeof ec?.index === 'number'
+        ? ec.index
+        : 0;
+  const evMin = typeof ec?.min === 'number' ? ec.min : -9;
+  const evMax = typeof ec?.max === 'number' ? ec.max : 9;
+  const evStep = typeof ec?.step === 'number' && ec.step > 0 ? ec.step : 1 / 3;
 
   const runAction = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
       await fn();
-      onRefresh();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -88,13 +50,11 @@ export function ExposureControl({
     const target = Math.max(evMin, Math.min(evMax, evIndex + delta));
     if (target === evIndex) return;
     await client.setExposureCompensation(target);
-    setLocalEv((prev) => ({ ...prev, index: target }));
   };
 
   const resetEv = async () => {
     if (evIndex === 0) return;
     await client.setExposureCompensation(0);
-    setLocalEv((prev) => ({ ...prev, index: 0 }));
   };
 
   const aperture = formatAperture(state?.aperture?.currentAperture);

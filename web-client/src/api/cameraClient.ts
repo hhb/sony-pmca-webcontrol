@@ -123,13 +123,6 @@ export interface PhotosResponse {
   photos: PhotoEntry[];
 }
 
-export interface ExposureCompensationInfo {
-  index: number;
-  min: number;
-  max: number;
-  step: number;
-}
-
 const STORAGE_KEY = 'pmca_camera_base_url';
 
 export function getDefaultCameraUrl(): string {
@@ -248,10 +241,6 @@ export class CameraClient {
     return this.requestJson<PhotosResponse>(`/api/photos?${params.toString()}`);
   }
 
-  liveViewUrl(ts = Date.now()): string {
-    return `${this.baseUrl}/api/liveview.jpg?t=${ts}`;
-  }
-
   liveViewMjpegUrl(): string {
     return `${this.baseUrl}/api/liveview.mjpeg`;
   }
@@ -290,40 +279,8 @@ export class CameraClient {
     return this.call('camera', 'setISOSensitivity', [iso]);
   }
 
-  getExposureCompensation(): Promise<number> {
-    return this.call<number>('params', 'getExposureCompensation');
-  }
-
   setExposureCompensation(index: number): Promise<unknown> {
     return this.call('params', 'setExposureCompensation', [index]);
-  }
-
-  async getExposureCompensationInfo(): Promise<ExposureCompensationInfo> {
-    try {
-      const results = await this.callBatch([
-        { target: 'params', method: 'getExposureCompensation' },
-        { target: 'params', method: 'getMinExposureCompensation' },
-        { target: 'params', method: 'getMaxExposureCompensation' },
-        { target: 'params', method: 'getExposureCompensationStep' },
-      ]);
-      const idx = Number(results[0]?.result ?? 0);
-      const min = Number(results[1]?.result ?? -9);
-      const max = Number(results[2]?.result ?? 9);
-      const step = Number(results[3]?.result ?? 1 / 3);
-      return {
-        index: Number.isNaN(idx) ? 0 : idx,
-        min: Number.isNaN(min) ? -9 : min,
-        max: Number.isNaN(max) ? 9 : max,
-        step: Number.isNaN(step) || step <= 0 ? 1 / 3 : step,
-      };
-    } catch {
-      try {
-        const idx = await this.getExposureCompensation();
-        return { index: idx ?? 0, min: -9, max: 9, step: 1 / 3 };
-      } catch {
-        return { index: 0, min: -9, max: 9, step: 1 / 3 };
-      }
-    }
   }
 
   focusStep(direction: 0 | 1, speed: 1 | 2 | 3 | 4 = 2): Promise<unknown> {

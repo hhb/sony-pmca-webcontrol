@@ -1,12 +1,14 @@
 # Sony PMCA WebControl (`sony-pmca-webcontrol`)
 
-Turn any PlayMemories-capable Sony Alpha / Cyber-shot camera (such as **a6000, a6300, a6500, a5100, a7 II, a7R II, a7S II, RX100 III–V, RX10 II–III**) into a network-connected workstation with **Wi-Fi LAN Live View, browser-based remote Manual Focus (MF) stepping, in-camera Focus Bracketing, and an HTTP REST API**.
+Turn any PlayMemories-capable Sony Alpha / Cyber-shot camera (such as **a6000, a6300, a6500, a5100, a7 II, a7R II, a7S II, RX100 III–V, RX10 II–III**) into a network-connected workstation with **Wi-Fi LAN MJPEG Live View, browser-based remote Manual Focus (MF) stepping, client-side closed-loop Focus Bracketing, and a reflective HTTP JSON-RPC API**.
 
 ## Key Features
 
-* **Direct Home Wi-Fi Connection**: Connects directly to your existing Wi-Fi router (no need to disconnect your Mac or iPad from the internet to join an ad-hoc camera hotspot) and displays its LAN IP address on the camera screen (port `8080`).
-* **Built-in Web Control UI**: Open `http://<camera-ip>:8080` in Safari/Chrome on Mac or iPad to view live preview frames, step manual focus (`<<<` `<<` `<` `>` `>>` `>>>`), adjust aperture/shutter/ISO, and run automated focus bracketing stacks.
-* **HTTP REST API & Python SDK**: Clean JSON/JPEG endpoints (`/api/status`, `/api/liveview.jpg`, `/api/focus/drive`, `/api/focus/goto`, `/api/bracket`, `/api/exposure`, `/api/capture`) plus a zero-dependency Python client (`client/pmca_client.py`) for scripts or AI Agents.
+* **Direct Home Wi-Fi Connection**: Connects directly to your existing Wi-Fi router (no need to disconnect your Mac or iPad from the internet to join an ad-hoc camera hotspot) and displays its LAN IP address on the camera screen (port `80` or `8080`).
+* **Universal Reflective RPC (`POST /api/call` & `GET /api/describe`)**: Exposes Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Scalar static/system classes over HTTP with automatic JSON ↔ Java conversion and batching.
+* **Real-Time Event Stream & MJPEG Live View**: Hardware-accelerated 640px JPEG preview stream (`/api/liveview.mjpeg` and `/api/liveview.jpg`) plus long-polling `CameraEx` listener events (`/api/events`) and state snapshots (`/api/state`).
+* **Modern React Web Client (`web-client/`)**: Single-file React + TypeScript app featuring live Focus Peaking, rule-of-thirds grid, luma histogram, 2x–4x click-to-magnify Focus Loupe, exposure & EV compensation controls, automated closed-loop focus stacking, SD card photo browser, auto-save to local directory, and an interactive RPC Inspector.
+* **Built-in Fallback Web UI**: Opening `http://<camera-ip>:8080` directly in any browser serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) for quick testing without running `web-client/`.
 * **Automated GitHub Actions Build**: Automatically compiles the camera `.apk` in the cloud on every push.
 
 ## Requirements
@@ -27,15 +29,15 @@ Turn any PlayMemories-capable Sony Alpha / Cyber-shot camera (such as **a6000, a
 
 ### 3. Host / Flashing Requirements
 * **Flashing (One-Time)**: Linux (recommended, via `libusb`) or Windows, Python 3.9+ in a `venv`, and [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE).
-* **Daily Operation / Client**: Any OS (macOS, iPadOS, Linux, Windows) on the same Wi-Fi LAN. Python 3.9+ (`opencv-python` and `numpy` optional for automated sharpness analysis in `client/example_macro_stack.py`).
+* **Daily Operation / Web Client**: Any OS (macOS, iPadOS, Linux, Windows) on the same Wi-Fi LAN. Node.js 18+ to run or build `web-client/` (or open `http://<camera-ip>:8080` directly for the built-in fallback UI).
 
 ## Documentation
 
 * **System Architecture & Technical Design**: [DESIGN.md](./DESIGN.md)
-* **Build, Flashing, API Reference & Automation Guide**: [USAGE.md](./USAGE.md)
+* **Build, Flashing, API Reference & Web Client Guide**: [USAGE.md](./USAGE.md)
 
 ## Repository Structure
 
 * `camera-app/` — Android 2.3 (API 10) in-camera APK source built on `OpenMemories-Framework` and `NanoHTTPD`
-* `client/` — Python client SDK (`pmca_client.py`) and automated focus-stacking script (`example_macro_stack.py`)
+* `web-client/` — React + TypeScript + Vite web control UI and `CameraClient` SDK (`src/api/cameraClient.ts`)
 * `.github/workflows/build.yml` — GitHub Actions workflow to build the `.apk` artifact
