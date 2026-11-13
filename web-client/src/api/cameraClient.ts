@@ -287,8 +287,10 @@ export class CameraClient {
     return this.call('camera', 'startOneShotFocusDrive', [direction, speed]);
   }
 
-  zoomStep(direction: 0 | 1, speed = 1): Promise<unknown> {
-    return this.call('camera', 'startOneShotZoom', [direction, speed]);
+  async zoomStep(direction: 0 | 1, speed = 1): Promise<void> {
+    await this.call('camera', 'startZoom', [direction, speed]);
+    await new Promise((r) => setTimeout(r, 90));
+    await this.call('camera', 'stopZoom');
   }
 
   setZoomPosition(opticalPosition: number, tolerance = 1): Promise<{ position: number; converged: boolean; superseded: boolean }> {
@@ -304,52 +306,20 @@ export class CameraClient {
   }
 
   /**
-   * Closed-loop focus positioning: prefers device-side `highlevel.setFocusPosition`,
-   * falling back to client-side stepping if running against an older camera APK.
+   * Device-side closed-loop focus positioning via `highlevel.setFocusPosition`.
    */
   async gotoFocus(
     targetPos: number,
     tolerance = 2,
-    maxSteps = 40,
     signal?: AbortSignal,
   ): Promise<number> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    try {
-      const res = await this.call<{ position: number; converged: boolean; superseded: boolean }>(
-        'highlevel',
-        'setFocusPosition',
-        [targetPos, tolerance],
-      );
-      if (typeof res?.position === 'number') {
-        return res.position;
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes('Unknown target')) {
-        throw err;
-      }
-    }
-
-    for (let i = 0; i < maxSteps; i++) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const state = await this.getState();
-      const current = state.focus?.currentPosition;
-      if (typeof current !== 'number') {
-        throw new Error('Focus position unavailable (ensure lens is in MF)');
-      }
-      const diff = targetPos - current;
-      if (Math.abs(diff) <= tolerance) {
-        return current;
-      }
-      const dir = diff > 0 ? FOCUS_FAR : FOCUS_NEAR;
-      const absDiff = Math.abs(diff);
-      const speed: 1 | 2 | 3 | 4 =
-        absDiff > 30 ? 4 : absDiff > 12 ? 3 : absDiff > 4 ? 2 : 1;
-      await this.focusStep(dir, speed);
-      await new Promise((r) => setTimeout(r, 120));
-    }
-    const finalState = await this.getState();
-    return finalState.focus?.currentPosition ?? targetPos;
+    const res = await this.call<{ position: number }>(
+      'highlevel',
+      'setFocusPosition',
+      [targetPos, tolerance],
+    );
+    return res.position;
   }
 
   async runFocusStack(
@@ -365,7 +335,7 @@ export class CameraClient {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const ratio = i / (count - 1);
       const target = Math.round(startPos + (endPos - startPos) * ratio);
-      const actual = await this.gotoFocus(target, 2, 40, signal);
+      const actual = await this.gotoFocus(target, 2, signal);
       onProgress({ index: i + 1, total: count, targetPos: target, actualPos: actual });
       await new Promise((r) => setTimeout(r, settleMs));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
