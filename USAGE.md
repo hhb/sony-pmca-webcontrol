@@ -10,22 +10,29 @@ The camera-side application is a **universal, stateless hardware bridge** exposi
 
 ### 1. Build the Camera APK
 
-Requires JDK 8, Android SDK Platform 10 (`android-2.3.3`), and Build Tools `25.0.2`:
+Requires JDK 8 (Android Gradle plugin 2.1.x fails on JDK 9+), Android SDK Platform 10 (`android-2.3.3`), and Build Tools `25.0.2`:
 
 ```bash
 cd camera-app
-./gradlew assembleDebug
+JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 ./gradlew assembleDebug
 ```
 
 Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk`
 
 ### 2. Flash to Camera via USB (`pmca-console`)
 
-Connect the camera via USB (MTP / Mass Storage mode) and run:
+> **Note:** Sony Alpha cameras do **not** expose standard Android `adb` debugging. Do not use `adb install` — flashing must go through USB MTP mode via `Sony-PMCA-RE` (`pmca-console.py`).
 
-```bash
-python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
-```
+1. Connect the camera via USB (MTP / Mass Storage mode).
+2. **Linux desktop note (GVFS / `Resource busy`):** Desktop environments automatically mount MTP devices under `gphoto2://`, causing `USBError: [Errno 16] Resource busy`. Unmount it before flashing:
+   ```bash
+   gio mount -l | grep -i gphoto2
+   gio mount -u gphoto2://Sony_ILCE-6000_.../
+   ```
+3. Run `pmca-console.py` using the project's Python virtualenv (which includes `pycryptodomex` and `pyusb`):
+   ```bash
+   .venv/bin/python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
+   ```
 
 ### 3. Launch on Camera
 
