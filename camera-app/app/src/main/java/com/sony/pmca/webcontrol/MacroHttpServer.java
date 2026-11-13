@@ -162,11 +162,26 @@ public class MacroHttpServer extends NanoHTTPD {
     }
 
     private JSONObject parseJsonBody(IHTTPSession session) throws Exception {
-        Map<String, String> files = new HashMap<String, String>();
-        session.parseBody(files);
-        String postData = files.get("postData");
-        if (postData != null && !postData.trim().isEmpty()) {
-            return new JSONObject(postData.trim());
+        Map<String, String> headers = session.getHeaders();
+        String lenStr = headers.get("content-length");
+        if (lenStr == null) {
+            lenStr = headers.get("Content-Length");
+        }
+        int contentLength = parseInt(lenStr, 0);
+        if (contentLength <= 0) {
+            return new JSONObject();
+        }
+        InputStream is = session.getInputStream();
+        byte[] buf = new byte[contentLength];
+        int offset = 0;
+        while (offset < contentLength) {
+            int n = is.read(buf, offset, contentLength - offset);
+            if (n < 0) break;
+            offset += n;
+        }
+        String postData = new String(buf, 0, offset, "UTF-8").trim();
+        if (!postData.isEmpty()) {
+            return new JSONObject(postData);
         }
         return new JSONObject();
     }

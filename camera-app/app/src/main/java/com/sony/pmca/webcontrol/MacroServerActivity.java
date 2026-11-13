@@ -694,43 +694,15 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     // --- Lens Info & Raw CameraEx Queries ---
 
     public JSONObject buildLensInfoJson() {
-        JSONObject obj = new JSONObject();
-        if (m_camera == null) return obj;
+        if (m_camera == null) return new JSONObject();
         try {
-            CameraEx.LensInfo li = m_camera.getLensInfo();
-            if (li != null) {
-                obj.put("LensName", li.LensName);
-                obj.put("LensType", li.LensType);
-                obj.put("LensId", li.LensId);
-                obj.put("LensVersion", li.LensVersion);
-                obj.put("FixedAperture", li.FixedAperture);
-                obj.put("PhaseShiftSensor", li.PhaseShiftSensor);
-                if (li.FocalLength != null) {
-                    JSONObject fl = new JSONObject();
-                    fl.put("wide", li.FocalLength.wide);
-                    fl.put("tele", li.FocalLength.tele);
-                    obj.put("FocalLength", fl);
-                }
-                if (li.MinFValue != null) {
-                    JSONObject minF = new JSONObject();
-                    minF.put("wide", li.MinFValue.wide);
-                    minF.put("tele", li.MinFValue.tele);
-                    obj.put("MinFValue", minF);
-                }
-                if (li.MaxFValue != null) {
-                    JSONObject maxF = new JSONObject();
-                    maxF.put("wide", li.MaxFValue.wide);
-                    maxF.put("tele", li.MaxFValue.tele);
-                    obj.put("MaxFValue", maxF);
-                }
+            Object val = RpcDispatcher.toJsonValue(m_camera.getLensInfo());
+            if (val instanceof JSONObject) {
+                return (JSONObject) val;
             }
-        } catch (Throwable t) {
-            try {
-                obj.put("error", t.toString());
-            } catch (Throwable ignored) {
-            }
+        } catch (Throwable ignored) {
         }
-        return obj;
+        return new JSONObject();
     }
 
     // --- Raw Camera.Parameters Access ---
