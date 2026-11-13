@@ -51,7 +51,7 @@ export interface CameraState {
   };
   autoIso?: number;
   focalLength?: number;
-  powerZoom?: boolean;
+  powerZoom?: boolean | number;
   previewMagnification?: {
     enabled?: boolean;
     ratio?: number;
@@ -65,11 +65,11 @@ export interface CameraState {
   lens?: {
     LensName?: string;
     LensType?: string;
-    FocalLength?: string;
-    MinFValue?: string;
-    MaxFValue?: string;
+    FocalLength?: string | { tele?: number; wide?: number };
+    MinFValue?: string | { tele?: number; wide?: number };
+    MaxFValue?: string | { tele?: number; wide?: number };
   };
-  wifi?: string;
+  wifi?: string | { ip?: string; port?: number };
 }
 
 export interface CameraEvent {

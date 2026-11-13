@@ -95,13 +95,20 @@ export function App() {
     }
   };
 
+  const wifiLabel =
+    typeof state?.wifi === 'string'
+      ? state.wifi
+      : state?.wifi?.ip
+        ? `${state.wifi.ip}:${state.wifi.port ?? 8080}`
+        : null;
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
           <span className={`status-dot ${connected ? 'dot-ok' : 'dot-off'}`} />
           <span className="brand-title">Sony PMCA WebControl</span>
-          {state?.wifi && <span className="muted-tag">{state.wifi}</span>}
+          {wifiLabel && <span className="muted-tag">{wifiLabel}</span>}
         </div>
 
         <form className="connect-form" onSubmit={handleConnectSubmit}>
