@@ -291,8 +291,21 @@ export class CameraClient {
     return this.call('camera', 'startOneShotZoom', [direction, speed]);
   }
 
+  setZoomPosition(opticalPosition: number, tolerance = 1): Promise<{ position: number; converged: boolean; superseded: boolean }> {
+    return this.call('highlevel', 'setZoomPosition', [opticalPosition, tolerance]);
+  }
+
+  setAperture(fValue100: number): Promise<{ position: number; converged: boolean; superseded: boolean }> {
+    return this.call('highlevel', 'setAperture', [fValue100]);
+  }
+
+  setShutterSpeed(n: number, d: number): Promise<{ currentShutterSpeed_n: number; currentShutterSpeed_d: number; converged: boolean; superseded: boolean }> {
+    return this.call('highlevel', 'setShutterSpeed', [n, d]);
+  }
+
   /**
-   * Closed-loop focus positioning using startOneShotFocusDrive (safe on ILCE-6000).
+   * Closed-loop focus positioning: prefers device-side `highlevel.setFocusPosition`,
+   * falling back to client-side stepping if running against an older camera APK.
    */
   async gotoFocus(
     targetPos: number,
@@ -300,6 +313,23 @@ export class CameraClient {
     maxSteps = 40,
     signal?: AbortSignal,
   ): Promise<number> {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    try {
+      const res = await this.call<{ position: number; converged: boolean; superseded: boolean }>(
+        'highlevel',
+        'setFocusPosition',
+        [targetPos, tolerance],
+      );
+      if (typeof res?.position === 'number') {
+        return res.position;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('Unknown target')) {
+        throw err;
+      }
+    }
+
     for (let i = 0; i < maxSteps; i++) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const state = await this.getState();

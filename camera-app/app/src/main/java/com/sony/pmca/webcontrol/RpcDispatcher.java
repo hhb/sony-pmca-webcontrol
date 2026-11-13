@@ -181,6 +181,14 @@ public class RpcDispatcher {
                 }
                 targets.put("static:System", arr);
             }
+            if (matchesTarget(targetFilter, "highlevel")) {
+                JSONArray arr = new JSONArray();
+                addSyntheticMethod(arr, queryFilter, "setFocusPosition", new String[]{"int", "int"}, "JSONObject");
+                addSyntheticMethod(arr, queryFilter, "setAperture", new String[]{"int"}, "JSONObject");
+                addSyntheticMethod(arr, queryFilter, "setShutterSpeed", new String[]{"int", "int"}, "JSONObject");
+                addSyntheticMethod(arr, queryFilter, "setZoomPosition", new String[]{"int", "int"}, "JSONObject");
+                targets.put("highlevel", arr);
+            }
 
             root.put("targets", targets);
         } catch (Throwable ignored) {
@@ -194,6 +202,19 @@ public class RpcDispatcher {
 
     private static boolean matchesQuery(String query, String name) {
         return query == null || query.trim().isEmpty() || name.toLowerCase().contains(query.trim().toLowerCase());
+    }
+
+    private static void addSyntheticMethod(JSONArray arr, String queryFilter, String name, String[] paramTypes, String returnType) throws Exception {
+        if (!matchesQuery(queryFilter, name)) return;
+        JSONObject item = new JSONObject();
+        item.put("name", name);
+        JSONArray params = new JSONArray();
+        for (String p : paramTypes) {
+            params.put(p);
+        }
+        item.put("params", params);
+        item.put("returnType", returnType);
+        arr.put(item);
     }
 
     private JSONArray describeMethodMap(Map<String, List<Method>> map, String queryFilter) {

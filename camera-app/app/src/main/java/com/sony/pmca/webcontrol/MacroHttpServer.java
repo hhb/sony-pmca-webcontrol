@@ -2,6 +2,7 @@ package com.sony.pmca.webcontrol;
 
 import com.sony.scalar.hardware.CameraEx;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
@@ -84,6 +85,17 @@ public class MacroHttpServer extends NanoHTTPD {
                     return jsonError(Response.Status.INTERNAL_ERROR, "Camera not initialized");
                 }
                 final JSONObject body = parseJsonBody(session);
+                if (!body.has("calls") && "highlevel".equals(body.optString("target", ""))) {
+                    String rpcMethod = body.optString("method", "");
+                    JSONArray args = body.optJSONArray("args");
+                    JSONObject result = m_activity.getGoalController().execute(rpcMethod, args);
+                    JSONObject out = new JSONObject();
+                    out.put("ok", true);
+                    out.put("target", "highlevel");
+                    out.put("method", rpcMethod);
+                    out.put("result", result);
+                    return jsonOk(out.toString());
+                }
                 JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
                     @Override
                     public JSONObject call() throws Exception {

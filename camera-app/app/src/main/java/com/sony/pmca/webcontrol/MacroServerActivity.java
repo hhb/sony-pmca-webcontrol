@@ -83,6 +83,12 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         return m_liveViewManager;
     }
 
+    private final CameraGoalController m_goalController = new CameraGoalController(this);
+
+    public CameraGoalController getGoalController() {
+        return m_goalController;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -251,6 +257,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 }
                 m_eventHub.setState("focus", data);
                 m_eventHub.emit("FocusDrive", data);
+                m_goalController.onFocusChanged(m_curFocus, m_maxFocus);
                 updateStatusText();
             }
         });
@@ -291,6 +298,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 }
                 m_eventHub.setState("aperture", data);
                 m_eventHub.emit("ApertureChange", data);
+                m_goalController.onApertureChanged(info.currentAperture, info.currentAvailableMin, info.currentAvailableMax);
                 updateStatusText();
             }
         });
@@ -312,6 +320,10 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                 }
                 m_eventHub.setState("shutter", data);
                 m_eventHub.emit("ShutterSpeedChange", data);
+                m_goalController.onShutterChanged(
+                        info.currentShutterSpeed_n, info.currentShutterSpeed_d,
+                        info.currentAvailableMin_n, info.currentAvailableMin_d,
+                        info.currentAvailableMax_n, info.currentAvailableMax_d);
                 updateStatusText();
             }
         });
@@ -350,6 +362,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     }
                     m_eventHub.setState("zoom", data);
                     m_eventHub.emit("ZoomChange", data);
+                    m_goalController.onZoomChanged(info.opticalPosition, info.stopped);
                     updateStatusText();
                 }
             });
