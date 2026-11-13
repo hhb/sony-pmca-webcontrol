@@ -89,6 +89,26 @@ class SonyPmcaClient:
         qs = urllib.parse.urlencode(params)
         return self._json_request(f"/api/exposure?{qs}", method="POST")
 
+    def zoom(
+        self,
+        direction: Optional[str] = None,
+        action: str = "step",
+        mag: Optional[int] = None,
+        magnify: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Control Power Zoom ('in'/'out'), Digital Zoom ('mag'=100..400), or MF Assist ('magnify'=0/100)."""
+        params: Dict[str, Any] = {}
+        if direction is not None:
+            params["dir"] = direction
+        if action is not None:
+            params["action"] = action
+        if mag is not None:
+            params["mag"] = int(mag)
+        if magnify is not None:
+            params["magnify"] = int(magnify)
+        qs = urllib.parse.urlencode(params)
+        return self._json_request(f"/api/zoom?{qs}", method="POST")
+
     def wait_until_idle(self, timeout: float = 60.0, poll_interval: float = 0.2) -> Dict[str, Any]:
         """Poll /api/status until camera state returns to 'idle'."""
         deadline = time.time() + timeout

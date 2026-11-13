@@ -50,9 +50,8 @@ public class MacroServerActivity extends BaseActivity
     private final Handler m_handler = new Handler();
 
     private FocusScaleView m_focusScaleView;
-    private TextView m_tvWifiStatus;
     private TextView m_tvCameraStatus;
-    private TextView m_tvInstructions;
+    private TextView m_tvWifiStatus;
 
     private WifiManager m_wifiManager;
     private BroadcastReceiver m_networkStateReceiver;
@@ -66,6 +65,9 @@ public class MacroServerActivity extends BaseActivity
     private volatile int m_aperture = 0;
     private volatile String m_shutterSpeed = "--";
     private volatile int m_iso = 0;
+    private volatile int m_digitalZoom = 100;
+    private volatile int m_opticalZoom = 100;
+    private volatile int m_previewMag = 0;
     private volatile List<Integer> m_supportedIsos;
 
     // Focus drive / goto / bracketing state
@@ -79,6 +81,18 @@ public class MacroServerActivity extends BaseActivity
     private ByteBuffer m_liveviewByteBuf;
     private byte[] m_latestJpeg;
     private long m_lastLiveviewFetchMs = 0;
+
+    private final Runnable m_stopZoomRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (m_camera != null) {
+                try {
+                    m_camera.stopZoom();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    };
 
     private final Runnable m_checkFocusRunnable = new Runnable() {
         @Override
@@ -123,9 +137,8 @@ public class MacroServerActivity extends BaseActivity
         m_surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
 
         m_focusScaleView = (FocusScaleView) findViewById(R.id.vFocusScale);
-        m_tvWifiStatus = (TextView) findViewById(R.id.tvWifiStatus);
         m_tvCameraStatus = (TextView) findViewById(R.id.tvCameraStatus);
-        m_tvInstructions = (TextView) findViewById(R.id.tvInstructions);
+        m_tvWifiStatus = (TextView) findViewById(R.id.tvWifiStatus);
 
         m_wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
         m_networkStateReceiver = new BroadcastReceiver() {
@@ -227,17 +240,34 @@ public class MacroServerActivity extends BaseActivity
                 }
             });
 
+            try {
+                m_camera.setZoomChangeListener(new CameraEx.ZoomChangeListener() {
+                    @Override
+                    public void onChanged(CameraEx.ZoomInfo zoomInfo, CameraEx cameraEx) {
+                        if (zoomInfo != null) {
+                            if (zoomInfo.opticalMagnification > 0) {
+                                m_opticalZoom = zoomInfo.opticalMagnification;
+                            }
+                            if (zoomInfo.digitalMagnification > 0) {
+                                m_digitalZoom = zoomInfo.digitalMagnification;
+                            }
+                            updateStatusText();
+                        }
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
+
             initCameraDefaults();
             refreshExposureCache();
             updateStatusText();
         } catch (Throwable t) {
             Logger.error("onResume camera init error: " + t.toString());
-            m_tvInstructions.setText("Init error: " + t.getMessage());
+            m_tvCameraStatus.setText("Init error: " + t.getMessage());
         }
     }
 
     private void startHttpServerWithFallback() {
-        // Try port 80 first; if non-root UID blocks <1024, fall back to 8080
         int[] candidatePorts = new int[]{80, MacroHttpServer.DEFAULT_PORT};
         for (int port : candidatePorts) {
             try {
@@ -260,6 +290,7 @@ public class MacroServerActivity extends BaseActivity
 
         abortBracket();
         m_handler.removeCallbacks(m_checkFocusRunnable);
+        m_handler.removeCallbacks(m_stopZoomRunnable);
 
         if (m_httpServer != null) {
             try {
@@ -284,6 +315,14 @@ public class MacroServerActivity extends BaseActivity
         if (m_camera != null) {
             m_surfaceHolder.removeCallback(this);
             try {
+                m_camera.stopZoom();
+            } catch (Throwable ignored) {
+            }
+            try {
+                m_camera.stopPreviewMagnification();
+            } catch (Throwable ignored) {
+            }
+            try {
                 m_camera.getNormalCamera().stopPreview();
             } catch (Throwable ignored) {
             }
@@ -303,6 +342,7 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
+    @SuppressWarnings("unchecked")
     private void initCameraDefaults() {
         // IMPORTANT: On Sony CameraEx, setParameters MUST use m_camera.createEmptyParameters(),
         // NEVER m_camera.getNormalCamera().getParameters() (which throws RuntimeException)!
@@ -323,13 +363,28 @@ public class MacroServerActivity extends BaseActivity
             }
         }
 
+        // Enable Smart / ClearImage / Precision Digital Zoom if supported on this body
+        try {
+            Camera.Parameters currentParams = m_camera.getNormalCamera().getParameters();
+            CameraEx.ParametersModifier curMod = m_camera.createParametersModifier(currentParams);
+            List<String> dzTypes = (List<String>) curMod.getSupportedDigitalZoomTypes();
+            if (dzTypes != null && !dzTypes.isEmpty()) {
+                Camera.Parameters dzParams = m_camera.createEmptyParameters();
+                CameraEx.ParametersModifier dzMod = m_camera.createParametersModifier(dzParams);
+                for (String zt : dzTypes) {
+                    dzMod.setDigitalZoomMode(zt, true);
+                }
+                m_camera.getNormalCamera().setParameters(dzParams);
+            }
+        } catch (Throwable ignored) {
+        }
+
         try {
             String platformVersion = ScalarProperties.getString(ScalarProperties.PROP_VERSION_PLATFORM);
             if (platformVersion != null) {
                 String[] split = platformVersion.split("\\Q.\\E");
                 if (split.length >= 2 && Integer.parseInt(split[1]) < 3) {
                     m_state = State.error;
-                    m_tvInstructions.setText("ERROR: Focus drive not supported on this body");
                 }
             }
         } catch (Throwable t) {
@@ -381,7 +436,7 @@ public class MacroServerActivity extends BaseActivity
                 break;
             case DISCONNECTED:
                 m_wifiIp = "0.0.0.0";
-                m_tvWifiStatus.setText("Wi-Fi: Disconnected (Check saved Wi-Fi in camera settings)");
+                m_tvWifiStatus.setText("Wi-Fi: Disconnected (Check camera Wi-Fi settings)");
                 break;
             case FAILED:
                 m_tvWifiStatus.setText("Wi-Fi: Connection failed");
@@ -394,13 +449,21 @@ public class MacroServerActivity extends BaseActivity
     private void updateStatusText() {
         String fStr = m_aperture > 0 ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--";
         String isoStr = m_iso == 0 ? "AUTO" : String.valueOf(m_iso);
-        String msg = String.format(Locale.US,
-                "Focus: %d/%d | %s | %s | ISO %s | [%s]",
-                m_curFocus, m_maxFocus, fStr, m_shutterSpeed, isoStr, m_state.name());
-        if (m_state == State.bracketing) {
-            msg += " (" + m_focusQueue.size() + " left)";
+        StringBuilder sb = new StringBuilder();
+        sb.append(fStr)
+          .append(" | ").append(m_shutterSpeed)
+          .append(" | ISO ").append(isoStr)
+          .append(" | MF ").append(m_curFocus).append("/").append(m_maxFocus);
+        if (m_digitalZoom > 100 || m_opticalZoom > 100) {
+            float totalZoom = (m_opticalZoom / 100.0f) * (m_digitalZoom / 100.0f);
+            sb.append(String.format(Locale.US, " | %.1fx", totalZoom));
         }
-        m_tvCameraStatus.setText(msg);
+        if (m_state == State.bracketing) {
+            sb.append(" [").append(m_focusQueue.size()).append("]");
+        } else if (m_state != State.idle) {
+            sb.append(" [").append(m_state.name()).append("]");
+        }
+        m_tvCameraStatus.setText(sb.toString());
     }
 
     private static String formatShutter(int n, int d) {
@@ -570,8 +633,6 @@ public class MacroServerActivity extends BaseActivity
                     stepDelta = 12;
                 }
 
-                // Use closed-loop target position with 50ms retry because Sony's
-                // startOneShotFocusDrive frequently drops single unverified pulses.
                 int basePos = (m_state == State.focusing) ? m_targetFocus : m_curFocus;
                 int nextTarget = basePos + (far ? stepDelta : -stepDelta);
                 if (m_maxFocus > 0) {
@@ -615,6 +676,63 @@ public class MacroServerActivity extends BaseActivity
                 m_stuckCount = 0;
                 updateStatusText();
                 driveTowardTarget();
+            }
+        });
+    }
+
+    public void controlZoom(final String dir, final String action, final Integer digitalMag, final Integer previewMag) {
+        m_handler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (m_camera == null) {
+                    return;
+                }
+                try {
+                    // 1. Focus Assist Preview Magnification (e.g. 0=off, 100=1x, 590=5.9x, 1170=11.7x)
+                    if (previewMag != null) {
+                        if (previewMag <= 0) {
+                            m_camera.stopPreviewMagnification();
+                            m_previewMag = 0;
+                        } else {
+                            m_camera.setPreviewMagnification(previewMag, new Pair<Integer, Integer>(0, 0));
+                            m_previewMag = previewMag;
+                        }
+                        updateStatusText();
+                        return;
+                    }
+
+                    // 2. Direct Digital Zoom magnification (100=1.0x, 140=1.4x, 200=2.0x, 400=4.0x)
+                    if (digitalMag != null) {
+                        if (digitalMag <= 100) {
+                            m_camera.resetDigitalZoom();
+                            m_digitalZoom = 100;
+                        } else {
+                            m_camera.setDigitalZoom(digitalMag);
+                            m_digitalZoom = digitalMag;
+                        }
+                        updateStatusText();
+                        return;
+                    }
+
+                    // 3. Power Zoom / Motor Zoom (in = TELE = 0, out = WIDE = 1)
+                    if ("stop".equalsIgnoreCase(action)) {
+                        m_handler.removeCallbacks(m_stopZoomRunnable);
+                        m_camera.stopZoom();
+                        return;
+                    }
+
+                    boolean zoomIn = !"out".equalsIgnoreCase(dir) && !"wide".equalsIgnoreCase(dir);
+                    int zoomDir = zoomIn ? CameraEx.ZOOM_DIRECTION_TELE : CameraEx.ZOOM_DIRECTION_WIDE;
+                    m_handler.removeCallbacks(m_stopZoomRunnable);
+                    m_camera.startZoom(zoomDir, 2);
+
+                    // Also step digital zoom if user clicks step and optical zoom doesn't move
+                    if (!"start".equalsIgnoreCase(action)) {
+                        m_handler.postDelayed(m_stopZoomRunnable, 140);
+                    }
+                } catch (Throwable t) {
+                    Logger.error("controlZoom error: " + t.toString());
+                }
             }
         });
     }
@@ -744,8 +862,6 @@ public class MacroServerActivity extends BaseActivity
             m_camera.startOneShotFocusDrive(
                     m_curFocus < target ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
                     speed);
-            // Sony startOneShotFocusDrive does not always trigger FocusDriveListener on the first pulse;
-            // schedule a 50ms check to retry until FocusDriveListener confirms movement.
             m_handler.postDelayed(m_checkFocusRunnable, 50);
         } catch (Throwable t) {
             Logger.error("driveTowardTarget error: " + t.toString());
@@ -825,6 +941,9 @@ public class MacroServerActivity extends BaseActivity
         sb.append("\"apertureFormatted\":\"").append(m_aperture > 0 ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--").append("\",");
         sb.append("\"shutterSpeed\":\"").append(m_shutterSpeed).append("\",");
         sb.append("\"iso\":").append(m_iso).append(",");
+        sb.append("\"opticalZoom\":").append(m_opticalZoom).append(",");
+        sb.append("\"digitalZoom\":").append(m_digitalZoom).append(",");
+        sb.append("\"previewMagnification\":").append(m_previewMag).append(",");
         sb.append("\"wifiIp\":\"").append(m_wifiIp).append("\",");
         sb.append("\"port\":").append(m_httpPort);
         sb.append("}");

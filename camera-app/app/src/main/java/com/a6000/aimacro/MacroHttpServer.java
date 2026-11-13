@@ -68,6 +68,15 @@ public class MacroHttpServer extends NanoHTTPD {
             return jsonOk("{\"ok\":true,\"action\":\"focus_goto\",\"target\":" + pos + "}");
         }
 
+        if ("/api/zoom".equals(uri)) {
+            String dir = params.get("dir");
+            String action = params.get("action");
+            Integer mag = params.containsKey("mag") ? parseIntObj(params.get("mag")) : null;
+            Integer previewMag = params.containsKey("magnify") ? parseIntObj(params.get("magnify")) : null;
+            m_activity.controlZoom(dir, action, mag, previewMag);
+            return jsonOk("{\"ok\":true,\"action\":\"zoom\"}");
+        }
+
         if ("/api/bracket".equals(uri)) {
             int min = parseInt(params.get("min"), -1);
             int max = parseInt(params.get("max"), -1);
@@ -156,7 +165,7 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<h3>Sony PMCA WebControl</h3>"
             + "<img id='lv' alt='Waiting for LiveView...'/>"
             + "<div class='card'><div id='st' class='stat'>Loading...</div></div>"
-            + "<div class='card'><b>Manual Focus Drive</b><div class='row'>"
+            + "<div class='card'><b>Manual Focus &amp; Bracketing</b><div class='row'>"
             + "<button onclick=\"api('/api/focus/drive?dir=near&speed=4')\">&#9664;&#9664;&#9664; (-12)</button>"
             + "<button onclick=\"api('/api/focus/drive?dir=near&speed=2')\">&#9664;&#9664; (-3)</button>"
             + "<button onclick=\"api('/api/focus/drive?dir=near&speed=1')\">&#9664; Near (-1)</button>"
@@ -166,6 +175,8 @@ public class MacroHttpServer extends NanoHTTPD {
             + "</div><div class='row'>"
             + "<span>Pos:</span><input id='fPos' type='number' value='0'/>"
             + "<button onclick=\"api('/api/focus/goto?pos='+document.getElementById('fPos').value)\">Go to Pos</button>"
+            + "<button onclick=\"api('/api/zoom?magnify=100')\">MF Assist</button>"
+            + "<button onclick=\"api('/api/zoom?magnify=0')\">Assist Off</button>"
             + "</div><div class='row'>"
             + "<button onclick='setNear()'>Set Near</button>"
             + "<input id='bMin' type='number' value='0'/>"
@@ -175,6 +186,14 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<span>Shots:</span><input id='bShots' type='number' value='15'/>"
             + "<button class='pri' onclick='startStack()'>Start Stack</button>"
             + "<button class='warn' onclick=\"api('/api/bracket/abort')\">Abort</button>"
+            + "</div></div>"
+            + "<div class='card'><b>Zoom (Optical PZ &amp; Digital)</b><div class='row'>"
+            + "<button onclick=\"api('/api/zoom?dir=out&action=step')\">Zoom Out (W)</button>"
+            + "<button onclick=\"api('/api/zoom?dir=in&action=step')\">Zoom In (T)</button>"
+            + "<button onclick=\"api('/api/zoom?mag=100')\">1.0x</button>"
+            + "<button onclick=\"api('/api/zoom?mag=140')\">1.4x</button>"
+            + "<button onclick=\"api('/api/zoom?mag=200')\">2.0x</button>"
+            + "<button onclick=\"api('/api/zoom?mag=400')\">4.0x</button>"
             + "</div></div>"
             + "<div class='card'><b>Exposure &amp; Capture</b><div class='row'>"
             + "<button onclick=\"api('/api/exposure?aperture=dec')\">F -</button>"
@@ -203,8 +222,9 @@ public class MacroHttpServer extends NanoHTTPD {
             + "setInterval(function(){fetch('/api/status').then(r=>r.json()).then(d=>{"
             + "curFocus=d.currentFocus;"
             + "var isoStr=d.iso===0?'AUTO':d.iso;"
+            + "var zStr=((d.opticalZoom||100)*(d.digitalZoom||100)/10000).toFixed(1)+'x';"
             + "document.getElementById('st').innerText="
-            + "'State: '+d.state+' | Focus: '+d.currentFocus+'/'+d.maxFocus+' | '+d.apertureFormatted+' | '+d.shutterSpeed+' | ISO '+isoStr+' | Left: '+d.remainingShots;"
+            + "'State: '+d.state+' | Focus: '+d.currentFocus+'/'+d.maxFocus+' | '+d.apertureFormatted+' | '+d.shutterSpeed+' | ISO '+isoStr+' | Zoom '+zStr+' | Left: '+d.remainingShots;"
             + "}).catch(()=>{});},350);"
             + "</script></body></html>";
 }
