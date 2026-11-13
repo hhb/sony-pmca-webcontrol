@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <SurfaceView
+        android:id="@+id/surfaceView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/tvWifiStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:background="#99000000"
+        android:padding="6dp"
+        android:text="Wi-Fi: Initializing..."
+        android:textColor="#00FF88"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tvCameraStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/tvWifiStatus"
+        android:background="#80000000"
+        android:padding="6dp"
+        android:text="Focus: -- / -- | F-- | -- | ISO --"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+
+    <com.a6000.aimacro.FocusScaleView
+        android:id="@+id/vFocusScale"
+        android:layout_width="match_parent"
+        android:layout_height="18dp"
+        android:layout_above="@+id/tvInstructions"
+        android:layout_marginLeft="16dp"
+        android:layout_marginRight="16dp"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:id="@+id/tvInstructions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:background="#99000000"
+        android:gravity="center"
+        android:padding="6dp"
+        android:text="OK: Test Shot | MENU: Exit"
+        android:textColor="#CCCCCC"
+        android:textSize="12sp" />
+
+</RelativeLayout>

@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+*.iml
+.idea/
+local.properties
+__pycache__/
+*.pyc
+.venv/
+*.jpg
+*.jpeg
+*.ARW

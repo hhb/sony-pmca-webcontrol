@@ -1,0 +1,2 @@
+-dontwarn com.sony.scalar.**
+-dontwarn fi.iki.elonen.**

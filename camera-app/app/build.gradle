@@ -1,0 +1,39 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 10
+    buildToolsVersion "25.0.2"
+
+    defaultConfig {
+        applicationId "com.a6000.aimacro"
+        minSdkVersion 10
+        targetSdkVersion 10
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_6
+        targetCompatibility JavaVersion.VERSION_1_6
+    }
+}
+
+android.applicationVariants.all { variant ->
+    variant.outputs.each { output ->
+        def apkName = "a6000-ai-macro-${output.baseName}-${variant.versionName}.apk"
+        output.outputFile = new File(output.outputFile.parent, apkName)
+    }
+}
+
+dependencies {
+    provided 'com.github.ma1co.OpenMemories-Framework:stubs:-SNAPSHOT'
+    compile 'com.github.ma1co.OpenMemories-Framework:framework:-SNAPSHOT'
+    compile 'com.nanohttpd:nanohttpd:2.1.1'
+}

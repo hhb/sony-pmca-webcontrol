@@ -1,0 +1,37 @@
+name: Build Sony a6000 AI Macro APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 10 & Build Tools
+        run: |
+          sdkmanager "platforms;android-10" "build-tools;25.0.2"
+
+      - name: Build APK
+        working-directory: camera-app
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: a6000-ai-macro-apk
+          path: camera-app/app/build/outputs/apk/*.apk
