@@ -68,9 +68,13 @@ Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/
 * **LiveView**: Canvas-based MJPEG stream with client-side **Focus Peaking**, **Rule-of-Thirds Grid**, **Luma Histogram**, and **2x–4x Click-to-Magnify Focus Loupe**. Automatically pauses and notifies the camera to release the stream slot when you switch browser tabs or minimize the window.
 * **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and remote shutter release.
 * **Focus & Stacking**: Multi-speed manual focus stepping, power zoom, and automated closed-loop **Focus Bracketing / Focus Stacking** between `Start A` and `End B`.
-* **Auto-Save**: Automatically downloads newly captured photos to a chosen local folder (via File System Access API) or browser downloads.
+* **Auto-Save**: Automatically downloads newly captured photos to a chosen local folder (via File System Access API `showDirectoryPicker`) or falls back to standard browser downloads.
 * **Photo Browser**: Browse SD card `DCIM` folders, preview photos, and download `.JPG` / `.ARW` files.
 * **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
+
+> **Auto-Save Browser Context Note:**
+> * Opening the single-file `index.html` directly via `file://` works for LiveView, exposure, focus stacking, and photo browsing (via direct CORS requests to the camera), **except** browsers do not allow `showDirectoryPicker` on `file://` pages — Auto-Save will automatically fall back to standard browser downloads into your default Downloads folder.
+> * To save silently into a chosen local folder, open the UI from a secure context: either run `cd web-client && npm run dev` (local HTTPS + `/api` proxy) or serve `dist/index.html` on `http://localhost` (e.g., `python3 -m http.server 8000` inside `web-client/dist/`).
 
 ### Option B: Built-in Fallback UI
 Opening `http://<camera-ip>:8080` directly in any browser on your LAN serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.
