@@ -8,6 +8,18 @@ interface LiveViewPanelProps {
   capturing: boolean;
 }
 
+function getLiveViewClientId(): string {
+  const fallback = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const existing = window.sessionStorage.getItem('pmca_lv_cid');
+    if (existing) return existing;
+    window.sessionStorage.setItem('pmca_lv_cid', fallback);
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function LiveViewPanel({
   client,
   connected,
@@ -34,6 +46,7 @@ export function LiveViewPanel({
 
   const focusPointRef = useRef<{ x: number; y: number } | null>(null);
   focusPointRef.current = focusPoint;
+  const liveViewCidRef = useRef<string>(getLiveViewClientId());
   const showLoupeRef = useRef<boolean>(false);
   showLoupeRef.current = showLoupe;
   const loupeZoomRef = useRef<number>(3);
@@ -50,9 +63,16 @@ export function LiveViewPanel({
     const onVisibilityChange = () => {
       setPageVisible(!document.hidden);
     };
+    const onPageHide = () => {
+      client.closeLiveView(liveViewCidRef.current);
+    };
     document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, []);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [client]);
 
   useEffect(() => {
     if (!connected || !streaming || !pageVisible) {
@@ -178,7 +198,7 @@ export function LiveViewPanel({
       if (cancelled) return;
       activeController = new AbortController();
       try {
-        const res = await fetch(client.liveViewMjpegUrl(), {
+        const res = await fetch(client.liveViewMjpegUrl(liveViewCidRef.current), {
           signal: activeController.signal,
           cache: 'no-store',
         });
@@ -249,6 +269,7 @@ export function LiveViewPanel({
       cancelled = true;
       void activeReader?.cancel().catch(() => {});
       activeController?.abort();
+      client.closeLiveView(liveViewCidRef.current);
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
   }, [client, connected, streaming, pageVisible]);

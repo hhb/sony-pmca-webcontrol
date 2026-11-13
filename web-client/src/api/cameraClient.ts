@@ -241,8 +241,23 @@ export class CameraClient {
     return this.requestJson<PhotosResponse>(`/api/photos?${params.toString()}`);
   }
 
-  liveViewMjpegUrl(): string {
-    return `${this.baseUrl}/api/liveview.mjpeg`;
+  liveViewMjpegUrl(cid?: string): string {
+    const query = cid ? `?cid=${encodeURIComponent(cid)}` : '';
+    return `${this.baseUrl}/api/liveview.mjpeg${query}`;
+  }
+
+  liveViewCloseUrl(cid: string): string {
+    return `${this.baseUrl}/api/liveview/close?cid=${encodeURIComponent(cid)}`;
+  }
+
+  closeLiveView(cid: string): void {
+    const url = this.liveViewCloseUrl(cid);
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      if (navigator.sendBeacon(url)) {
+        return;
+      }
+    }
+    void fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
   }
 
   latestPhotoUrl(ts = Date.now()): string {

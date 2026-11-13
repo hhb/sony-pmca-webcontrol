@@ -263,6 +263,42 @@ async function eventLoop() {
 
 let lvMode = 'mjpeg';
 let lvTimer = null;
+let lvMjpegActive = false;
+
+const lvCid = (() => {
+  try {
+    let id = sessionStorage.getItem('pmca_lv_cid');
+    if (!id) {
+      id = 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      sessionStorage.setItem('pmca_lv_cid', id);
+    }
+    return id;
+  } catch (e) {
+    return 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  }
+})();
+
+function notifyLiveViewClose() {
+  if (!lvMjpegActive) return;
+  lvMjpegActive = false;
+  const url = '/api/liveview/close?cid=' + encodeURIComponent(lvCid);
+  if (navigator.sendBeacon && navigator.sendBeacon(url)) {
+    return;
+  }
+  fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
+}
+
+function stopLiveView() {
+  const img = document.getElementById('lv');
+  if (lvTimer) {
+    clearTimeout(lvTimer);
+    lvTimer = null;
+  }
+  img.onload = null;
+  img.onerror = null;
+  img.removeAttribute('src');
+  notifyLiveViewClose();
+}
 
 function setLvMode(mode) {
   lvMode = mode === 'jpg' ? 'jpg' : 'mjpeg';
@@ -278,23 +314,43 @@ function startLiveView() {
   img.onload = null;
   img.onerror = null;
 
-  if (lvMode === 'mjpeg') {
-    img.src = '/api/liveview.mjpeg?t=' + Date.now();
+  if (document.hidden) {
+    img.removeAttribute('src');
+    notifyLiveViewClose();
     return;
   }
 
+  if (lvMode === 'mjpeg') {
+    lvMjpegActive = true;
+    img.src = '/api/liveview.mjpeg?cid=' + encodeURIComponent(lvCid) + '&t=' + Date.now();
+    return;
+  }
+
+  notifyLiveViewClose();
   function nextFrame() {
-    if (lvMode !== 'jpg') return;
+    if (lvMode !== 'jpg' || document.hidden) return;
     img.src = '/api/liveview.jpg?t=' + Date.now();
   }
   img.onload = () => {
-    if (lvMode === 'jpg') lvTimer = setTimeout(nextFrame, 50);
+    if (lvMode === 'jpg' && !document.hidden) lvTimer = setTimeout(nextFrame, 50);
   };
   img.onerror = () => {
-    if (lvMode === 'jpg') lvTimer = setTimeout(nextFrame, 500);
+    if (lvMode === 'jpg' && !document.hidden) lvTimer = setTimeout(nextFrame, 500);
   };
   nextFrame();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopLiveView();
+  } else {
+    startLiveView();
+  }
+});
+
+window.addEventListener('pagehide', () => {
+  notifyLiveViewClose();
+});
 
 (async function init() {
   startLiveView();

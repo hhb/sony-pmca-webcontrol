@@ -7,7 +7,7 @@ import com.sony.scalar.hardware.DeviceBuffer;
 import com.sony.scalar.hardware.DeviceMemory;
 
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
+import java.util.ArrayList;
 
 /**
  * Manages hardware LiveView streaming via Sony CameraSequence and
@@ -18,7 +18,12 @@ public class LiveViewManager {
     private static final int LIVEVIEW_BUF_CAPACITY = 128 * 1024;
 
     public static final class MjpegClient {
+        final String cid;
         volatile boolean closed = false;
+
+        MjpegClient(String cid) {
+            this.cid = cid;
+        }
     }
 
     public static final class LiveViewFrame {
@@ -40,7 +45,7 @@ public class LiveViewManager {
     private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
     private long m_frameSeq = 0;
-    private final LinkedList<MjpegClient> m_mjpegClientList = new LinkedList<MjpegClient>();
+    private final ArrayList<MjpegClient> m_mjpegClientList = new ArrayList<MjpegClient>(MAX_MJPEG_CLIENTS);
     private int m_mjpegClients = 0;
     private volatile boolean m_liveviewRunning = false;
     private Thread m_liveviewThread;
@@ -116,17 +121,60 @@ public class LiveViewManager {
     }
 
     public MjpegClient acquireMjpegClient() {
+        return acquireMjpegClient(null);
+    }
+
+    public MjpegClient acquireMjpegClient(String cid) {
+        String normalizedCid = normalizeCid(cid);
         synchronized (m_frameLock) {
+            if (normalizedCid != null) {
+                for (int i = m_mjpegClientList.size() - 1; i >= 0; i--) {
+                    MjpegClient existing = m_mjpegClientList.get(i);
+                    if (normalizedCid.equals(existing.cid)) {
+                        existing.closed = true;
+                        m_mjpegClientList.remove(i);
+                    }
+                }
+            }
             while (m_mjpegClientList.size() >= MAX_MJPEG_CLIENTS) {
-                MjpegClient oldest = m_mjpegClientList.removeFirst();
+                MjpegClient oldest = m_mjpegClientList.remove(0);
                 oldest.closed = true;
             }
-            MjpegClient client = new MjpegClient();
-            m_mjpegClientList.addLast(client);
+            MjpegClient client = new MjpegClient(normalizedCid);
+            m_mjpegClientList.add(client);
             m_mjpegClients = m_mjpegClientList.size();
             m_frameLock.notifyAll();
             return client;
         }
+    }
+
+    public boolean closeMjpegClient(String cid) {
+        String normalizedCid = normalizeCid(cid);
+        if (normalizedCid == null) {
+            return false;
+        }
+        boolean closedAny = false;
+        synchronized (m_frameLock) {
+            for (int i = m_mjpegClientList.size() - 1; i >= 0; i--) {
+                MjpegClient existing = m_mjpegClientList.get(i);
+                if (normalizedCid.equals(existing.cid)) {
+                    existing.closed = true;
+                    m_mjpegClientList.remove(i);
+                    closedAny = true;
+                }
+            }
+            if (closedAny) {
+                m_mjpegClients = m_mjpegClientList.size();
+                m_frameLock.notifyAll();
+            }
+        }
+        return closedAny;
+    }
+
+    private static String normalizeCid(String cid) {
+        if (cid == null) return null;
+        String trimmed = cid.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     public void releaseMjpegClient(MjpegClient client) {

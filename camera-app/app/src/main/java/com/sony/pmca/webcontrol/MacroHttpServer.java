@@ -117,8 +117,17 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/liveview.mjpeg".equals(uri)) {
-                LiveViewManager.MjpegClient client = m_activity.getLiveViewManager().acquireMjpegClient();
+                String cid = params.get("cid");
+                LiveViewManager.MjpegClient client = m_activity.getLiveViewManager().acquireMjpegClient(cid);
                 return new MjpegStreamResponse(client);
+            }
+
+            if ("/api/liveview/close".equals(uri)) {
+                String cid = params.get("cid");
+                boolean closed = m_activity.getLiveViewManager().closeMjpegClient(cid);
+                JSONObject res = new JSONObject();
+                res.put("closed", closed);
+                return jsonOk(res.toString());
             }
 
             if ("/api/liveview.jpg".equals(uri)) {
