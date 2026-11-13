@@ -16,13 +16,25 @@ export function LiveViewPanel({
 }: LiveViewPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const histCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const loupeCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [streaming, setStreaming] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [peaking, setPeaking] = useState(false);
   const [showHistogram, setShowHistogram] = useState(true);
+  const [showLoupe, setShowLoupe] = useState(false);
+  const [loupeZoom, setLoupeZoom] = useState<2 | 3 | 4>(3);
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+
   const [fps, setFps] = useState<number>(0);
   const [frameError, setFrameError] = useState<string | null>(null);
+
+  const focusPointRef = useRef<{ x: number; y: number } | null>(null);
+  focusPointRef.current = focusPoint;
+  const showLoupeRef = useRef<boolean>(false);
+  showLoupeRef.current = showLoupe;
+  const loupeZoomRef = useRef<number>(3);
+  loupeZoomRef.current = loupeZoom;
 
   useEffect(() => {
     if (!connected || !streaming) {
@@ -72,6 +84,49 @@ export function LiveViewPanel({
               }
             }
 
+            // Update magnified loupe canvas before drawing overlays on main canvas
+            if (showLoupeRef.current && focusPointRef.current && loupeCanvasRef.current) {
+              const lCanvas = loupeCanvasRef.current;
+              const lCtx = lCanvas.getContext('2d');
+              if (lCtx) {
+                const z = loupeZoomRef.current;
+                const srcW = canvas.width / z;
+                const srcH = canvas.height / z;
+                const srcX = Math.max(0, Math.min(canvas.width - srcW, focusPointRef.current.x - srcW / 2));
+                const srcY = Math.max(0, Math.min(canvas.height - srcH, focusPointRef.current.y - srcH / 2));
+
+                lCtx.clearRect(0, 0, lCanvas.width, lCanvas.height);
+                lCtx.imageSmoothingEnabled = true;
+                lCtx.imageSmoothingQuality = 'high';
+                lCtx.drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, lCanvas.width, lCanvas.height);
+
+                // Draw delicate crosshair in center of loupe
+                const cx = lCanvas.width / 2;
+                const cy = lCanvas.height / 2;
+                lCtx.strokeStyle = 'rgba(126, 231, 135, 0.7)';
+                lCtx.lineWidth = 1;
+                lCtx.beginPath();
+                lCtx.moveTo(cx - 10, cy);
+                lCtx.lineTo(cx + 10, cy);
+                lCtx.moveTo(cx, cy - 10);
+                lCtx.lineTo(cx, cy + 10);
+                lCtx.stroke();
+              }
+            }
+
+            // Draw target focus box on main canvas
+            if (showLoupeRef.current && focusPointRef.current) {
+              const z = loupeZoomRef.current;
+              drawFocusBox(
+                ctx,
+                focusPointRef.current.x,
+                focusPointRef.current.y,
+                canvas.width / z,
+                canvas.height / z,
+                `${z}x`,
+              );
+            }
+
             if (showGrid) {
               drawGrid(ctx, canvas.width, canvas.height);
             }
@@ -106,6 +161,41 @@ export function LiveViewPanel({
       if (timerId !== undefined) window.clearTimeout(timerId);
     };
   }, [client, connected, streaming, showGrid, peaking, showHistogram]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const imgRatio = canvas.width / canvas.height;
+    const boxRatio = rect.width / rect.height;
+    let renderWidth = rect.width;
+    let renderHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (boxRatio > imgRatio) {
+      renderWidth = rect.height * imgRatio;
+      offsetX = (rect.width - renderWidth) / 2;
+    } else {
+      renderHeight = rect.width / imgRatio;
+      offsetY = (rect.height - renderHeight) / 2;
+    }
+
+    const relX = e.clientX - rect.left - offsetX;
+    const relY = e.clientY - rect.top - offsetY;
+
+    if (relX < 0 || relX > renderWidth || relY < 0 || relY > renderHeight) {
+      return;
+    }
+
+    const normX = relX / renderWidth;
+    const normY = relY / renderHeight;
+    const clickX = Math.round(normX * canvas.width);
+    const clickY = Math.round(normY * canvas.height);
+
+    setFocusPoint({ x: clickX, y: clickY });
+    setShowLoupe(true);
+  };
 
   return (
     <section className="panel liveview-panel">
@@ -143,11 +233,33 @@ export function LiveViewPanel({
           >
             Hist
           </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${showLoupe ? 'btn-active' : ''}`}
+            onClick={() => {
+              if (!showLoupe && !focusPoint) {
+                const canvas = canvasRef.current;
+                const cx = canvas ? Math.round(canvas.width / 2) : 320;
+                const cy = canvas ? Math.round(canvas.height / 2) : 240;
+                setFocusPoint({ x: cx, y: cy });
+              }
+              setShowLoupe((v) => !v);
+            }}
+            title="Click image to zoom in on focus area"
+          >
+            Loupe
+          </button>
         </div>
       </div>
 
       <div className="liveview-stage">
-        <canvas ref={canvasRef} className="liveview-canvas" />
+        <canvas
+          ref={canvasRef}
+          className="liveview-canvas"
+          style={{ cursor: 'crosshair' }}
+          onClick={handleCanvasClick}
+          title="Click to focus loupe here"
+        />
         {showHistogram && connected && streaming && !frameError && (
           <canvas
             ref={histCanvasRef}
@@ -155,6 +267,35 @@ export function LiveViewPanel({
             height={56}
             className="histogram-overlay"
           />
+        )}
+        {showLoupe && focusPoint && connected && streaming && !frameError && (
+          <div
+            className={`loupe-window ${focusPoint.x > (canvasRef.current?.width ?? 640) / 2 ? 'loupe-left' : 'loupe-right'}`}
+          >
+            <div className="loupe-header">
+              <span className="loupe-title">🔍 {loupeZoom}x Focus Zoom</span>
+              <div className="loupe-toolbar">
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => setLoupeZoom((z) => (z === 2 ? 3 : z === 3 ? 4 : 2))}
+                  title="Switch zoom level (2x / 3x / 4x)"
+                >
+                  {loupeZoom}x
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => setShowLoupe(false)}
+                  title="Close Loupe"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <canvas ref={loupeCanvasRef} width={180} height={180} className="loupe-canvas" />
+            <div className="loupe-hint">Click image to move focus box</div>
+          </div>
         )}
         {(!connected || frameError) && (
           <div className="liveview-placeholder">
@@ -237,4 +378,65 @@ function applyFocusPeaking(data: Uint8ClampedArray, w: number, h: number) {
       }
     }
   }
+}
+
+function drawFocusBox(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  boxW: number,
+  boxH: number,
+  zoomText: string,
+) {
+  ctx.save();
+  const left = cx - boxW / 2;
+  const top = cy - boxH / 2;
+
+  // Box border with outer glow
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+  ctx.shadowBlur = 4;
+  ctx.strokeStyle = '#7ee787';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(left, top, boxW, boxH);
+
+  // Corner bracket accents
+  const cornerLen = Math.max(6, Math.min(boxW, boxH) * 0.22);
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  // Top-left
+  ctx.moveTo(left, top + cornerLen);
+  ctx.lineTo(left, top);
+  ctx.lineTo(left + cornerLen, top);
+  // Top-right
+  ctx.moveTo(left + boxW - cornerLen, top);
+  ctx.lineTo(left + boxW, top);
+  ctx.lineTo(left + boxW, top + cornerLen);
+  // Bottom-left
+  ctx.moveTo(left, top + boxH - cornerLen);
+  ctx.lineTo(left, top + boxH);
+  ctx.lineTo(left + cornerLen, top + boxH);
+  // Bottom-right
+  ctx.moveTo(left + boxW - cornerLen, top + boxH);
+  ctx.lineTo(left + boxW, top + boxH);
+  ctx.lineTo(left + boxW, top + boxH - cornerLen);
+  ctx.stroke();
+
+  // Center crosshair
+  const chLen = 5;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - chLen, cy);
+  ctx.lineTo(cx + chLen, cy);
+  ctx.moveTo(cx, cy - chLen);
+  ctx.lineTo(cx, cy + chLen);
+  ctx.stroke();
+
+  // Badge label above box
+  ctx.fillStyle = 'rgba(13, 17, 23, 0.8)';
+  ctx.fillRect(left, Math.max(0, top - 16), 34, 14);
+  ctx.fillStyle = '#7ee787';
+  ctx.font = 'bold 10px monospace';
+  ctx.fillText(zoomText, left + 4, Math.max(11, top - 5));
+
+  ctx.restore();
 }
