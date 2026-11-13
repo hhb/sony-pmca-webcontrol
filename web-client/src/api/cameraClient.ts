@@ -242,7 +242,7 @@ export class CameraClient {
   // --- Convenience Camera Controls ---
 
   takePicture(): Promise<unknown> {
-    return this.call('camera', 'takePicture');
+    return this.call('camera', 'burstableTakePicture');
   }
 
   incrementAperture(): Promise<unknown> {

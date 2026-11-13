@@ -1086,13 +1086,18 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     // --- Physical Camera Keys ---
 
     @Override
-    protected boolean onEnterKeyDown() {
+    protected boolean onShutterKeyDown() {
         try {
             if (m_camera != null) {
                 m_camera.burstableTakePicture();
             }
         } catch (Throwable ignored) {
         }
+        return true;
+    }
+
+    @Override
+    protected boolean onShutterKeyUp() {
         return true;
     }
 
