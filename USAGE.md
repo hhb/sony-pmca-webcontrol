@@ -22,10 +22,19 @@ cd camera-app
 ```
 
 ### 3. Flashing the APK to the Sony a6000
+Flashing works best on **Linux** (via native `libusb`, no custom drivers needed) or **Windows** (using the prebuilt GUI/CLI release).
+
+* **Official Tool (`pmca-console` / `pmca-gui`)**: [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (Prebuilt binaries: [Releases](https://github.com/ma1co/Sony-PMCA-RE/releases))
+* **Community Rust Alternative**: [masterflai/pmca-re-reloaded](https://github.com/masterflai/pmca-re-reloaded)
+
+Steps to flash on Linux:
 1. On the camera menu: `Setup` → `USB Connection` → set to **`MTP`**.
-2. Connect the camera to your computer via a data-capable Micro-USB cable and install the APK using `pmca-re-reloaded` / `Sony-PMCA-RE`:
+2. Connect the camera to your computer via a data-capable Micro-USB cable and run `pmca-console`:
    ```bash
-   pmca-console install -f a6000-ai-macro-debug-1.0.0.apk
+   git clone https://github.com/ma1co/Sony-PMCA-RE.git
+   cd Sony-PMCA-RE
+   pip install -r requirements.txt
+   sudo ./pmca-console.py install -f /path/to/a6000-ai-macro-debug-1.0.0.apk
    ```
 3. Unplug the USB cable. Open the camera's `Application List` to find **`AI Macro Server`**.
 

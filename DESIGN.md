@@ -9,7 +9,7 @@ The stock Sony a6000 (`ILCE-6000`) firmware imposes three major limitations for 
 
 ## 2. Core Mechanism: In-Camera Android Subsystem & `CameraEx`
 
-Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** subsystem that hosts PlayMemories Camera Apps. By leveraging the open-source `OpenMemories-Framework` and `PMCA-RE` toolchain, we can run a custom Android `.apk` directly inside the camera and invoke Sony's undocumented hardware layer (`com.sony.scalar.hardware.CameraEx`):
+Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** subsystem that hosts PlayMemories Camera Apps. By leveraging the open-source [OpenMemories-Framework](https://github.com/ma1co/OpenMemories-Framework) and [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) toolchain, we can run a custom Android `.apk` directly inside the camera and invoke Sony's undocumented hardware layer (`com.sony.scalar.hardware.CameraEx`):
 
 * **Motorized Focus Stepping**: `CameraEx.startOneShotFocusDrive(direction, speed)` drives the lens focus motor in `NEAR` or `FAR` directions across 4 speed levels (`1..4`).
 * **Absolute Focus Scale Readback**: `CameraEx.FocusDriveListener` reports `FocusPosition(currentPosition, maxPosition)`, enabling closed-loop positioning to any integer focus coordinate.
