@@ -6,7 +6,7 @@ An open-source **Sony Imaging Edge alternative** and **Wi-Fi tethering** solutio
 
 You don't need Android Studio or Node.js to try it out:
 1. Download the prebuilt `sony-pmca-webcontrol-debug-1.0.0.apk` (and optionally the single-file `index.html`) from **GitHub Releases** or the latest **GitHub Actions** run artifacts.
-2. Flash the `.apk` to your camera via USB using [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) (see [USAGE.md](./USAGE.md) for step-by-step instructions).
+2. Flash the `.apk` to your camera via USB using [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) (see [USER_GUIDE.md](./USER_GUIDE.md) for step-by-step instructions).
 3. Launch **Sony PMCA WebControl** in your camera's *Application* menu and open the displayed IP in your browser (or run `web-client/` for the full React UI with Focus Peaking, Focus Loupe, Focus Stacking, and auto-save).
 
 ## Key Features
@@ -39,8 +39,11 @@ You don't need Android Studio or Node.js to try it out:
 
 ## Documentation
 
+* **User Guide (Compatibility, Flashing & UI)**: [USER_GUIDE.md](./USER_GUIDE.md)
+* **Developer Guide (Build, Testing & Extending)**: [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md)
+* **HTTP & RPC API Reference**: [API.md](./API.md)
 * **System Architecture & Technical Design**: [DESIGN.md](./DESIGN.md)
-* **Build, Flashing, API Reference & Web Client Guide**: [USAGE.md](./USAGE.md)
+* **AI Agent Guide**: [AGENTS.md](./AGENTS.md)
 
 ## Repository Structure
 

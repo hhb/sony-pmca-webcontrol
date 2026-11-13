@@ -1,67 +1,34 @@
-# Sony PMCA WebControl — Usage & API Reference (`USAGE.md`)
+# Sony PMCA WebControl — HTTP & RPC API Reference (`API.md`)
 
-This document is the complete reference for building, flashing, and developing clients or AI Agents against **Sony PMCA WebControl** (`com.sony.pmca.webcontrol`).
+The camera runs an embedded HTTP server (`MacroHttpServer`, `NanoHTTPD` on port `80` with fallback to `8080`).
 
-The camera-side application is a **universal, stateless hardware bridge** exposing Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Sony Scalar static/system classes over a single JSON RPC endpoint (`POST /api/call`) plus real-time state/event streaming (`GET /api/state`, `GET /api/events`). Higher-level workflows (closed-loop focus positioning, focus peaking, live histogram, and automated focus bracketing) live in the web client (`web-client/`).
-
----
-
-## Part 1: Build & Flashing
-
-### 1. Build the Camera APK
-
-Requires JDK 8 (Android Gradle plugin 2.1.x fails on JDK 9+), Android SDK Platform 10 (`android-2.3.3`), and Build Tools `25.0.2`:
-
-```bash
-cd camera-app
-JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 ./gradlew assembleDebug
-```
-
-Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk`
-
-### 2. Flash to Camera via USB (`pmca-console`)
-
-> **Note:** Sony Alpha cameras do **not** expose standard Android `adb` debugging. Do not use `adb install` — flashing must go through USB MTP mode via `Sony-PMCA-RE` (`pmca-console.py`).
-
-1. Connect the camera via USB (MTP / Mass Storage mode).
-2. **Linux desktop note (GVFS / `Resource busy`):** Desktop environments automatically mount MTP devices under `gphoto2://`, causing `USBError: [Errno 16] Resource busy`. Unmount it before flashing:
-   ```bash
-   gio mount -l | grep -i gphoto2
-   gio mount -u gphoto2://Sony_ILCE-6000_.../
-   ```
-3. Run `pmca-console.py` using the project's Python virtualenv (which includes `pycryptodomex` and `pyusb`):
-   ```bash
-   .venv/bin/python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
-   ```
-
-### 3. Launch on Camera
-
-1. Disconnect USB.
-2. On the camera: **Menu → Application → Application List → PMCA WebControl**.
-3. Wait for the camera to join your configured Wi-Fi network. The LAN URL (e.g., `http://192.168.0.250:8080`) appears at the bottom of the camera screen.
+* **CORS**: All endpoints return `Access-Control-Allow-Origin: *` and support `OPTIONS` preflight requests.
+* **Main-Thread Timeout**: Reflective RPC calls execute on the Android main thread with a **3000 ms timeout** (returning HTTP `504 Gateway Timeout` if camera firmware blocks).
+* **Error Format**: Failed API calls return `{"ok": false, "error": "..."}`.
 
 ---
 
-## Part 2: HTTP REST API Specification
+## Summary of Endpoints
 
-All endpoints support CORS (`Access-Control-Allow-Origin: *`).
-All RPC calls run on the Android main thread with a **3000 ms timeout** (returning HTTP `504 Gateway Timeout` if the camera firmware blocks). Errors return `{"ok": false, "error": "..."}`.
-
-### Summary of Endpoints
-* `POST /api/call` — Universal reflective RPC (single or batched calls)
-* `GET  /api/describe` — Introspect all callable targets, method names, and signatures
-* `GET  /api/state` — Latest cached snapshots from all `CameraEx` listeners + `seq`
-* `GET  /api/events` — Long-polling callback event stream
-* `GET  /api/liveview.mjpeg` — Adaptive `multipart/x-mixed-replace` 640px JPEG stream (up to 3 concurrent clients)
-* `GET  /api/liveview.jpg` — Single latest 640px JPEG live preview frame
-* `GET  /api/photos`, `/api/photos/latest`, `/api/photos/download` — SD card listing & downloads
-* `GET  /api/log` — Plain-text camera debug/crash log
+| Method & Path | Description |
+|---|---|
+| `POST /api/call` | Universal reflective RPC (single or batched calls) |
+| `GET  /api/describe` | Introspect all callable targets, method names, and signatures |
+| `GET  /api/state` | Latest cached snapshots from all `CameraEx` listeners + `seq` |
+| `GET  /api/events` | Long-polling callback event stream |
+| `GET  /api/liveview.mjpeg` | Adaptive `multipart/x-mixed-replace` 640px JPEG stream (up to 3 concurrent clients) |
+| `GET/POST /api/liveview/close` | Explicitly close an active MJPEG client by `cid` |
+| `GET  /api/liveview.jpg` | Single latest 640px JPEG live preview frame |
+| `GET  /api/photos` | Non-recursive `DCIM` folder and photo listing |
+| `GET  /api/photos/latest` | Download the latest captured JPEG |
+| `GET  /api/photos/download` | Download a specific SD card file (`.JPG` or `.ARW`) |
+| `GET  /api/log` | Plain-text camera debug/crash log |
 
 ---
 
-### 1. Universal Reflective RPC (`POST /api/call`)
+## 1. Universal Reflective RPC (`POST /api/call`)
 
-#### Single Call Format
+### Single Call Format
 ```json
 {
   "target": "camera",
@@ -70,7 +37,7 @@ All RPC calls run on the Android main thread with a **3000 ms timeout** (returni
 }
 ```
 
-#### Batch Call Format
+### Batch Call Format
 Executes sequentially on the camera main thread in a single HTTP round-trip. **Consecutive `modifier` `set*` calls are automatically coalesced into a single `setParameters()` IPC call:**
 ```json
 {
@@ -82,7 +49,7 @@ Executes sequentially on the camera main thread in a single HTTP round-trip. **C
 }
 ```
 
-#### Supported Targets
+### Supported Targets
 | `target` | Underlying Object | Behavior & Notes |
 |---|---|---|
 | `"camera"` | `com.sony.scalar.hardware.CameraEx` | Calls instance methods directly (excluding lifecycle/listener methods). Also supports synthetic `"capabilities"` returning `LensInfo` + all `ParametersModifier.is*Supported()` flags. |
@@ -94,7 +61,7 @@ Executes sequentially on the camera main thread in a single HTTP round-trip. **C
 | `"static:System"` | Android System / `BatteryManager` | `getBattery` — returns `{ level, scale, percent, status, plugged }`. |
 | `"highlevel"` | `CameraGoalController` | Device-side event-driven closed-loop setters (`setFocusPosition`, `setAperture`, `setShutterSpeed`, `setZoomPosition`). Runs on HTTP worker thread without blocking camera UI. |
 
-#### High-Level Closed-Loop APIs (`target: "highlevel"`)
+### High-Level Closed-Loop APIs (`target: "highlevel"`)
 Sony `CameraEx` does not expose absolute setters for focus, aperture, shutter speed, or optical zoom — only relative stepping methods. `CameraGoalController` drives these in a tight local closed loop using hardware listener callbacks:
 
 * **`setFocusPosition(targetPos[, tolerance])`**: Drives MF position using `startOneShotFocusDrive` until within `tolerance` (default `2`).
@@ -119,7 +86,7 @@ Sony `CameraEx` does not expose absolute setters for focus, aperture, shutter sp
 }
 ```
 
-#### Automatic JSON ↔ Java Conversion
+### Automatic JSON ↔ Java Conversion
 * **Arguments**:
   * Primitives & strings (`int`, `long`, `float`, `double`, `boolean`, `String`) convert automatically.
   * `int[]` / `byte[]` / `String[]`: pass a JSON array (e.g., `[1, 2, 3]`).
@@ -128,16 +95,16 @@ Sony `CameraEx` does not expose absolute setters for focus, aperture, shutter sp
 * **Overload Resolution**: Matched by method name, argument count, and JSON value type. Unmatched calls return candidate signatures in the error message.
 * **Return Values**: Primitives, `Pair` → `[first, second]`, `List`/arrays → JSON array, and Sony structs (`LensInfo`, `WideTele`, `Temperature.Status`, etc.) → JSON object of all public non-static fields.
 
-#### Security Blacklist
+### Security Blacklist
 To prevent destabilizing the camera session or overwriting event hooks, the following are blocked:
-* `open`, `reopen`, `release`, `getNormalCamera`, `create*`, `withSupportedParameters`, `tryIgnoreInhibit`, `shiftFocusPosition` (blocks/hangs on ILCE-6000 main thread)
+* `open`, `reopen`, `release`, `getNormalCamera`, `create*`, `withSupportedParameters`, `tryIgnoreInhibit`, `shiftFocusPosition` (blocks/hangs on `ILCE-6000` main thread)
 * All `set*Listener`, `set*Callback`, and methods taking interface/callback arguments (callbacks are handled centrally and streamed via `/api/events`).
 
-> **Caution (Preview Pipeline Rebuild):** Setting structural parameters such as `setImageSize`, `setImageAspectRatio`, `setRawRecMode`, `setPictureStorageFormat`, or `setDriveMode` may cause the camera firmware to rebuild its preview pipeline, briefly interrupting `/api/liveview.jpg`.
+> **Caution (Preview Pipeline Rebuild):** Setting structural parameters such as `setImageSize`, `setImageAspectRatio`, `setRawRecMode`, `setPictureStorageFormat`, or `setDriveMode` may cause the camera firmware to rebuild its preview pipeline, briefly interrupting LiveView.
 
 ---
 
-### 2. Self-Documenting Introspection (`GET /api/describe`)
+## 2. Self-Documenting Introspection (`GET /api/describe`)
 
 Lists all callable targets, method names, parameter types, and return types discovered via reflection.
 
@@ -146,12 +113,11 @@ Lists all callable targets, method names, parameter types, and return types disc
 
 ---
 
-### 3. State & Real-Time Event Bus
+## 3. State & Real-Time Event Bus
 
-#### `GET /api/state`
+### `GET /api/state`
 Returns the latest cached snapshots from all registered `CameraEx` listeners plus the monotonic event sequence number (`seq`).
 
-**Response Example:**
 ```json
 {
   "ok": true,
@@ -183,7 +149,7 @@ Returns the latest cached snapshots from all registered `CameraEx` listeners plu
 > * `Focus direction`: `0` = `NEAR`, `1` = `FAR`.
 > * `Zoom direction`: `0` = `TELE` (zoom in), `1` = `WIDE` (zoom out).
 
-#### `GET /api/events?since=<seq>&timeout=<sec>`
+### `GET /api/events?since=<seq>&timeout=<sec>`
 Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least one event with `seq > since` arrives, or until `timeout` seconds elapse (`0..30`, default `10`).
 
 **Emitted Event Types:**
@@ -206,48 +172,12 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 
 ---
 
-### 4. LiveView & Photo Downloads
+## 4. LiveView & Photo Downloads
 
-* **`GET /api/liveview.mjpeg`**: Continuous `multipart/x-mixed-replace` 640px hardware JPEG stream from `CameraSequence` (supports up to 3 concurrent clients; returns `503` if busy).
+* **`GET /api/liveview.mjpeg?cid=<clientId>`**: Continuous `multipart/x-mixed-replace` 640px hardware JPEG stream from `CameraSequence` (up to 3 concurrent clients; if full, the oldest client is evicted; if the same `cid` reconnects, its previous stream is replaced immediately).
+* **`GET|POST /api/liveview/close?cid=<clientId>`**: Immediately closes and releases the MJPEG stream matching `cid` (designed for `navigator.sendBeacon` / `fetch(..., { keepalive: true })` on tab hide, pause, or page unload). Returns `{"ok": true, "closed": true|false}`.
 * **`GET /api/liveview.jpg`**: Latest 640px hardware JPEG frame from `CameraSequence`.
-* **`GET /api/photos?dir=<relPath>&limit=100`**: Non-recursive directory listing under `DCIM` (sorted newest/name descending). Omit `dir` to list `DCIM` folders (e.g. `100MSDCF`, `101MSDCF`); pass `?dir=100MSDCF` to list photos in that folder. Returns `{ dir, totalPhotosInDir, dirs: [...], photos: [...] }`.
+* **`GET /api/photos?dir=<relPath>&limit=100`**: Non-recursive directory listing under `DCIM` (sorted descending). Omit `dir` to list `DCIM` folders (e.g., `100MSDCF`, `101MSDCF`); pass `?dir=100MSDCF` to list photos in that folder. Returns `{ dir, totalPhotosInDir, dirs: [...], photos: [...] }`.
 * **`GET /api/photos/latest`**: Downloads the latest captured JPEG (from in-memory capture buffer or SD card).
 * **`GET /api/photos/download?path=<absolutePath>`**: Streams a specific SD card file (JPG or ARW).
 * **`GET /api/log`**: Returns plain-text crash/debug logs from the camera.
-
----
-
-## Part 3: Web Client (`web-client/`)
-
-The React + TypeScript + Vite web frontend wraps `/api/call`, `/api/describe`, `/api/state`, `/api/events`, `/api/liveview.mjpeg`, and `/api/photos` in `web-client/src/api/cameraClient.ts`:
-
-```bash
-cd web-client
-npm install
-npm run dev       # Local HTTPS dev server (required for showDirectoryPicker)
-npm run build     # Outputs single self-contained web-client/dist/index.html
-```
-
-Features included in the web UI:
-* **LiveView**: Canvas-based `/api/liveview.mjpeg` stream with client-side Focus Peaking, rule-of-thirds grid, live luma histogram, and 2x–4x click-to-magnify Focus Loupe.
-* **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and shutter release.
-* **Focus & Stacking**: Multi-speed manual focus stepping (`startOneShotFocusDrive`), power zoom, and client-side closed-loop focus bracketing.
-* **Auto-Save**: Automatically downloads newly captured photos to a chosen local directory (via File System Access API) or browser downloads.
-* **Photo Browser**: Non-recursive SD card directory navigation (`/api/photos?dir=...`), preview modal, and download.
-* **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
-
-> **Note**: Opening `http://<camera-ip>:8080` directly in a browser serves a lightweight built-in fallback page (`camera-app/app/src/main/assets/index.html`) for quick testing without running `web-client/`.
-
----
-
-## Part 4: Guide for Future Agents Extending the System
-
-1. **Adding New Client Features Without Reflashing**:
-   * First call `GET /api/describe` on the live camera (or inspect `stubs--SNAPSHOT.jar`) to verify if the desired Sony method already exists on `camera`, `modifier`, `params`, or `static:*`.
-   * If it exists, implement the higher-level logic (e.g., target-F-number solver, HDR exposure bracketing, intervalometer, auto-exposure highlight protection) purely in the client SDK using `POST /api/call` + `GET /api/events`.
-2. **Adding New Static/System Targets on Camera**:
-   * In `RpcDispatcher.java`, register additional whitelisted classes (e.g., `com.sony.scalar.sysutil.didep.Media`, `com.sony.scalar.provider.AvindexStore`, `com.sony.scalar.sysutil.ScalarInput`) following the `static:Temperature` / `static:ScalarProperties` pattern.
-3. **Adding New Event Listeners**:
-   * Register additional `CameraEx` listeners (such as `IntervalRecListener`, `TrackingFocusListener`, `FaceDetectionListener`, `MeteringModeInfoListener`) in `MacroServerActivity.registerCameraListeners()` and forward them via `m_eventHub.emit(type, json)`.
-4. **Streaming Upgrade**:
-   * Replace `/api/liveview.jpg` HTTP polling and `/api/events` long-polling with `multipart/x-mixed-replace` MJPEG or WebSocket streaming if sub-30ms latency is needed.

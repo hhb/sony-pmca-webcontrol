@@ -71,14 +71,13 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
   * **Per-Parameter Isolation & Latest-Wins Preemption**: Focus, aperture, shutter, and zoom run in independent `GoalSlot`s so different parameters execute in parallel, while a newer target for the same parameter increments `generationId` and immediately supersedes any in-flight request (`superseded: true`).
 * `CameraClient.runFocusStack()` interpolates `N` targets between `Start A` and `End B`, calls `gotoFocus()` (`highlevel.setFocusPosition`), waits `settleMs`, triggers `burstableTakePicture()`, and supports instant cancellation via `AbortController`.
 
-### 4.3 LiveView Canvas Processing & Auto-Save
+### 4.3 LiveView Stream Management, Canvas Processing & Auto-Save
+* `LiveViewManager` maintains up to `MAX_MJPEG_CLIENTS = 3` concurrent MJPEG clients in an `ArrayList<MjpegClient>` keyed by client-generated `cid` (per-tab `sessionStorage` ID). Reconnecting with the same `cid` replaces that tab's previous stream immediately; exceeding 3 distinct clients evicts the oldest (`index 0`).
+* Both `web-client` (`LiveViewPanel.tsx`) and the built-in fallback UI (`assets/index.html`) automatically pause LiveView on `visibilitychange` (`hidden`) and notify `POST /api/liveview/close?cid=...` via `navigator.sendBeacon` (or `fetch(..., { keepalive: true })`) on pause, tab switch, or `pagehide`, waking `waitForNextFrame()` immediately.
 * `LiveViewPanel.tsx` reads the `/api/liveview.mjpeg` byte stream via `fetch()` + `ReadableStream`, decoding only the newest frame (zero backlog) onto `<canvas>` with optional real-time client-side **Focus Peaking**, **Luma Histogram**, **Rule-of-Thirds Grid**, and a **2x–4x Click-to-Magnify Focus Loupe**.
 * `App.tsx` listens for `StoreImageComplete` (and `Jpeg` fallback when no SD card is present) on `/api/events`, deduplicating filenames and queueing downloads via the File System Access API (`showDirectoryPicker`) or standard browser downloads.
 
-## 5. System & Hardware Requirements
-1. **Supported Camera Bodies**:
-   * **Full Support** (`ScalarProperties.PROP_VERSION_PLATFORM >= 2.3`): `a5100`, `a6000`, `a6300`, `a6500`, `a7 II`, `a7R II`, `a7S II`, `a7` / `a7R` / `a7S` (updated firmware), `RX100 III / IV / V`, `RX10 II / III`, `RX1R II`.
-   * **Partial Support** (`PROP_VERSION_PLATFORM < 2.3`): `NEX-5R`, `NEX-5T`, `NEX-6`, `RX100 II` (Live View, exposure, and capture work; motorized focus drive is unavailable in firmware).
-2. **AF Lens Requirement**: Software focus control relies on electronic commands sent to the lens focus motor. **An E-mount lens with electronic contacts and an AF motor is required** (including standard AF lenses mounted on electronic AF macro extension tubes). Purely mechanical manual lenses (e.g., Laowa 65mm 2X) cannot be focused electronically, though live view, exposure adjustments, and shutter release still work.
-3. **Power Management**: The app calls `setAutoPowerOffMode(false)` while active so the camera never sleeps mid-session. Using an NP-FW50 USB dummy battery is recommended for long studio sessions.
-4. **Storage Workflow**: Full-resolution `.JPG` and `.ARW` files are written to the internal SD card and can be browsed on demand (`/api/photos`) or auto-saved over Wi-Fi.
+## 5. Related Documentation
+* [USER_GUIDE.md](./USER_GUIDE.md) — Hardware compatibility, flashing instructions, and UI walkthrough
+* [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) — Build instructions, testing loop, and extension points
+* [API.md](./API.md) — HTTP REST & reflective RPC specification
