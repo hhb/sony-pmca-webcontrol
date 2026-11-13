@@ -11,3 +11,5 @@ tools/
 *.jpg
 *.jpeg
 *.ARW
+node_modules/
+dist/
