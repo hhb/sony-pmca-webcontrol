@@ -25,25 +25,30 @@ This guide covers camera compatibility, flashing the `.apk` to your Sony camera,
 
 ## 2. Flashing the APK to Your Camera
 
-> **Note:** Sony Alpha cameras do **not** expose standard Android `adb` debugging. Do not use `adb install` — flashing goes through USB MTP mode via [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE).
+> **Note:** Sony Alpha cameras do **not** expose standard Android `adb` debugging. Do not use `adb install` — flashing goes through USB MTP mode.
 
-1. **Get the APK**:
-   * Download `sony-pmca-webcontrol-debug-1.0.0.apk` from **GitHub Releases** (or build it yourself — see [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md)).
-2. **Get `Sony-PMCA-RE` (`pmca-console.py`)**:
+First, download `sony-pmca-webcontrol-debug-1.0.0.apk` from **GitHub Releases** (or build it yourself — see [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md)), connect the camera via USB (MTP / Mass Storage mode), and power it on.
+
+### Method A: Desktop GUI (Recommended) — PMCA-RE RELOADED
+If you don't want to set up Python dependencies or USB drivers manually, use **[PMCA-RE RELOADED](https://github.com/masterflai/pmca-re-reloaded)** (cross-platform Rust desktop app for Windows, macOS, and Linux):
+1. Download and launch PMCA-RE RELOADED from its [GitHub Releases](https://github.com/masterflai/pmca-re-reloaded/releases).
+2. Connect your camera over USB and select `sony-pmca-webcontrol-debug-1.0.0.apk` to install.
+
+### Method B: Command Line — `Sony-PMCA-RE` (`pmca-console.py`)
+1. **Get `Sony-PMCA-RE`**:
    * `tools/` is not bundled in this repository. Either download a prebuilt binary from [Sony-PMCA-RE Releases](https://github.com/ma1co/Sony-PMCA-RE/releases), or clone it and set up a Python virtual environment:
      ```bash
      git clone https://github.com/ma1co/Sony-PMCA-RE.git tools/Sony-PMCA-RE
      python3 -m venv .venv
      .venv/bin/pip install -r tools/Sony-PMCA-RE/requirements.txt
      ```
-3. **Connect via USB (MTP / Mass Storage mode)** and power on the camera.
-4. **Linux desktop note (`USBError: [Errno 16] Resource busy`)**:
+2. **Linux desktop note (`USBError: [Errno 16] Resource busy`)**:
    Desktop environments (GNOME/GVFS) automatically mount MTP devices under `gphoto2://`, preventing `libusb` from claiming the interface. Unmount it first:
    ```bash
    gio mount -l | grep -i gphoto2
    gio mount -u gphoto2://Sony_ILCE-6000_.../
    ```
-5. **Install the APK**:
+3. **Install the APK**:
    ```bash
    .venv/bin/python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
    ```
