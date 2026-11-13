@@ -85,6 +85,32 @@ Executes sequentially on the camera main thread in a single HTTP round-trip. **C
 | `"static:Settings"` | `com.sony.scalar.sysutil.didep.Settings` | `getTargetMediaId`, `getUsingMedia`, `isLiveAndRec`. |
 | `"static:Temperature"` | `com.sony.scalar.sysutil.didep.Temperature` | `getStatus` — instantiates, reads `Temperature.Status` public fields, and releases safely. |
 | `"static:System"` | Android System / `BatteryManager` | `getBattery` — returns `{ level, scale, percent, status, plugged }`. |
+| `"highlevel"` | `CameraGoalController` | Device-side event-driven closed-loop setters (`setFocusPosition`, `setAperture`, `setShutterSpeed`, `setZoomPosition`). Runs on HTTP worker thread without blocking camera UI. |
+
+#### High-Level Closed-Loop APIs (`target: "highlevel"`)
+Sony `CameraEx` does not expose absolute setters for focus, aperture, shutter speed, or optical zoom — only relative stepping methods. `CameraGoalController` drives these in a tight local closed loop using hardware listener callbacks:
+
+* **`setFocusPosition(targetPos[, tolerance])`**: Drives MF position using `startOneShotFocusDrive` until within `tolerance` (default `2`).
+* **`setAperture(fValue100)`**: Steps `incrementAperture` / `decrementAperture` until reaching `fValue100` (e.g., `800` for `F8.0`, clamped to `currentAvailableMin`..`currentAvailableMax`).
+* **`setShutterSpeed(numerator, denominator)`**: Steps `incrementShutterSpeed` / `decrementShutterSpeed` until reaching `numerator / denominator` seconds (e.g., `[1, 125]` for `1/125s`).
+* **`setZoomPosition(opticalPosition[, tolerance])`**: Steps `startZoom` / `stopZoom` until reaching `opticalPosition` (default tolerance `1`).
+
+**Concurrency & Preemption:**
+* **Cross-parameter parallel**: Focus, aperture, shutter, and zoom each have independent state slots and can run concurrently.
+* **Same-parameter latest-wins**: Sending a new target for the same parameter immediately supersedes any in-flight call (`superseded: true`) and steers directly to the new target.
+
+```json
+// POST /api/call
+{ "target": "highlevel", "method": "setFocusPosition", "args": [350, 2] }
+
+// Response
+{
+  "ok": true,
+  "target": "highlevel",
+  "method": "setFocusPosition",
+  "result": { "converged": true, "superseded": false, "stalled": false, "position": 350, "target": 350, "steps": 6 }
+}
+```
 
 #### Automatic JSON ↔ Java Conversion
 * **Arguments**:
