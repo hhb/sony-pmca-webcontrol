@@ -154,8 +154,9 @@ public class MacroHttpServer extends NanoHTTPD {
         if ("/api/exposure".equals(uri)) {
             String ap = params.get("aperture");
             String ss = params.get("shutter");
+            String isoOp = params.get("isoOp");
             Integer iso = params.containsKey("iso") ? parseIntObj(params.get("iso")) : null;
-            m_activity.adjustExposure(ap, ss, iso);
+            m_activity.adjustExposure(ap, ss, isoOp, iso);
             return jsonOk("{\"ok\":true,\"action\":\"exposure_updated\"}");
         }
 
@@ -273,10 +274,10 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<button onclick=\"api('/api/exposure?aperture=inc')\">F +</button>"
             + "<button onclick=\"api('/api/exposure?shutter=dec')\">Shutter -</button>"
             + "<button onclick=\"api('/api/exposure?shutter=inc')\">Shutter +</button>"
+            + "<button onclick=\"api('/api/exposure?isoOp=dec')\">ISO -</button>"
+            + "<button onclick=\"api('/api/exposure?isoOp=inc')\">ISO +</button>"
             + "<button onclick=\"api('/api/exposure?iso=0')\">ISO AUTO</button>"
             + "<button onclick=\"api('/api/exposure?iso=100')\">ISO 100</button>"
-            + "<button onclick=\"api('/api/exposure?iso=400')\">ISO 400</button>"
-            + "<button onclick=\"api('/api/exposure?iso=1600')\">ISO 1600</button>"
             + "</div><div class='row'>"
             + "<button class='pri' onclick=\"api('/api/capture')\">Take Photo</button>"
             + "<a class='btn succ' href='/api/photos/latest' download='photo_latest.jpg'>&#11015; Download Last Photo</a>"

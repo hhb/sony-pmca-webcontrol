@@ -853,7 +853,7 @@ public class MacroServerActivity extends BaseActivity
         });
     }
 
-    public void adjustExposure(final String apertureOp, final String shutterOp, final Integer isoVal) {
+    public void adjustExposure(final String apertureOp, final String shutterOp, final String isoOp, final Integer isoVal) {
         m_handler.post(new Runnable() {
             @Override
             public void run() {
@@ -878,6 +878,39 @@ public class MacroServerActivity extends BaseActivity
                         m_camera.createParametersModifier(params).setISOSensitivity(isoVal);
                         m_camera.getNormalCamera().setParameters(params);
                         m_iso = isoVal;
+                    } else if (isoOp != null && m_supportedIsos != null && !m_supportedIsos.isEmpty()) {
+                        // Continuous ISO step: AUTO(0) <-> 100 <-> 125 <-> 160 <-> 200 <-> ... <-> 25600
+                        int cur = m_iso;
+                        int next = cur;
+                        if ("inc".equalsIgnoreCase(isoOp)) {
+                            if (cur == 0) {
+                                next = m_supportedIsos.get(0);
+                            } else {
+                                for (int val : m_supportedIsos) {
+                                    if (val > cur) {
+                                        next = val;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else if ("dec".equalsIgnoreCase(isoOp)) {
+                            if (cur != 0) {
+                                int prev = 0; // fallback to AUTO
+                                for (int val : m_supportedIsos) {
+                                    if (val >= cur) {
+                                        break;
+                                    }
+                                    prev = val;
+                                }
+                                next = prev;
+                            }
+                        }
+                        if (next != cur) {
+                            Camera.Parameters params = m_camera.createEmptyParameters();
+                            m_camera.createParametersModifier(params).setISOSensitivity(next);
+                            m_camera.getNormalCamera().setParameters(params);
+                            m_iso = next;
+                        }
                     }
                     updateStatusText();
                 } catch (Throwable t) {

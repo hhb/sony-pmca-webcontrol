@@ -78,8 +78,9 @@ class SonyPmcaClient:
         aperture: Optional[str] = None,
         shutter: Optional[str] = None,
         iso: Optional[int] = None,
+        iso_op: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Adjust aperture ('inc'/'dec'), shutter ('inc'/'dec'), or ISO (e.g. 100)."""
+        """Adjust aperture ('inc'/'dec'), shutter ('inc'/'dec'), ISO step ('iso_op'='inc'/'dec'), or ISO absolute value ('iso'=100)."""
         params: Dict[str, Any] = {}
         if aperture is not None:
             params["aperture"] = aperture
@@ -87,6 +88,8 @@ class SonyPmcaClient:
             params["shutter"] = shutter
         if iso is not None:
             params["iso"] = int(iso)
+        if iso_op is not None:
+            params["isoOp"] = iso_op
         qs = urllib.parse.urlencode(params)
         return self._json_request(f"/api/exposure?{qs}", method="POST")
 
