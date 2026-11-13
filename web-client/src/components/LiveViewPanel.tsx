@@ -19,6 +19,9 @@ export function LiveViewPanel({
   const loupeCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [streaming, setStreaming] = useState(true);
+  const [pageVisible, setPageVisible] = useState<boolean>(() =>
+    typeof document === 'undefined' ? true : !document.hidden,
+  );
   const [showGrid, setShowGrid] = useState(true);
   const [peaking, setPeaking] = useState(false);
   const [showHistogram, setShowHistogram] = useState(false);
@@ -44,7 +47,15 @@ export function LiveViewPanel({
   showHistogramRef.current = showHistogram;
 
   useEffect(() => {
-    if (!connected || !streaming) {
+    const onVisibilityChange = () => {
+      setPageVisible(!document.hidden);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (!connected || !streaming || !pageVisible) {
       setFps(0);
       return;
     }
@@ -52,6 +63,7 @@ export function LiveViewPanel({
     let cancelled = false;
     let retryTimer: number | undefined;
     let activeController: AbortController | null = null;
+    let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let frameCount = 0;
     let lastFpsTime = performance.now();
 
@@ -183,6 +195,7 @@ export function LiveViewPanel({
 
         setFrameError(null);
         const reader = res.body.getReader();
+        activeReader = reader;
         let buffer = new Uint8Array(0);
         const decoder = new TextDecoder('ascii');
 
@@ -234,10 +247,11 @@ export function LiveViewPanel({
 
     return () => {
       cancelled = true;
+      void activeReader?.cancel().catch(() => {});
       activeController?.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [client, connected, streaming]);
+  }, [client, connected, streaming, pageVisible]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -279,7 +293,7 @@ export function LiveViewPanel({
       <div className="panel-header">
         <div className="panel-title">
           <span>LiveView</span>
-          <span className="badge">{streaming && connected ? `${fps} FPS` : 'PAUSED'}</span>
+          <span className="badge">{streaming && pageVisible && connected ? `${fps} FPS` : 'PAUSED'}</span>
         </div>
         <div className="toolbar-row">
           <button
