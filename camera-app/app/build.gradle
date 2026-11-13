@@ -5,7 +5,7 @@ android {
     buildToolsVersion "25.0.2"
 
     defaultConfig {
-        applicationId "com.a6000.aimacro"
+        applicationId "com.sony.pmca.webcontrol"
         minSdkVersion 10
         targetSdkVersion 10
         versionCode 1

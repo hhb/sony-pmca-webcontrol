@@ -1,4 +1,4 @@
-package com.a6000.aimacro;
+package com.sony.pmca.webcontrol;
 
 import com.github.ma1co.pmcademo.app.Logger;
 

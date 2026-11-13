@@ -1,4 +1,4 @@
-package com.a6000.aimacro;
+package com.sony.pmca.webcontrol;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;

@@ -1,4 +1,4 @@
-package com.a6000.aimacro;
+package com.sony.pmca.webcontrol;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
