@@ -117,10 +117,8 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/liveview.mjpeg".equals(uri)) {
-                if (!m_activity.getLiveViewManager().tryAcquireMjpegClient()) {
-                    return addCors(new Response(STATUS_SERVICE_UNAVAILABLE, MIME_PLAINTEXT, "Too many LiveView clients"));
-                }
-                return new MjpegStreamResponse();
+                LiveViewManager.MjpegClient client = m_activity.getLiveViewManager().acquireMjpegClient();
+                return new MjpegStreamResponse(client);
             }
 
             if ("/api/liveview.jpg".equals(uri)) {
@@ -244,8 +242,11 @@ public class MacroHttpServer extends NanoHTTPD {
     }
 
     private class MjpegStreamResponse extends Response {
-        MjpegStreamResponse() {
+        private final LiveViewManager.MjpegClient m_client;
+
+        MjpegStreamResponse(LiveViewManager.MjpegClient client) {
             super(Status.OK, "multipart/x-mixed-replace; boundary=frame", "");
+            m_client = client;
         }
 
         @Override
@@ -264,7 +265,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 long lastSeq = -1;
                 LiveViewManager liveView = m_activity.getLiveViewManager();
                 while (true) {
-                    LiveViewManager.LiveViewFrame frame = liveView.waitForNextFrame(lastSeq, 2000);
+                    LiveViewManager.LiveViewFrame frame = liveView.waitForNextFrame(m_client, lastSeq, 2000);
                     if (frame == null) {
                         break;
                     }
@@ -283,7 +284,7 @@ public class MacroHttpServer extends NanoHTTPD {
             } catch (IOException ignored) {
                 // Client disconnected
             } finally {
-                m_activity.getLiveViewManager().releaseMjpegClient();
+                m_activity.getLiveViewManager().releaseMjpegClient(m_client);
             }
         }
     }

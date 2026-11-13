@@ -7,6 +7,7 @@ import com.sony.scalar.hardware.DeviceBuffer;
 import com.sony.scalar.hardware.DeviceMemory;
 
 import java.nio.ByteBuffer;
+import java.util.LinkedList;
 
 /**
  * Manages hardware LiveView streaming via Sony CameraSequence and
@@ -15,6 +16,10 @@ import java.nio.ByteBuffer;
 public class LiveViewManager {
     public static final int MAX_MJPEG_CLIENTS = 3;
     private static final int LIVEVIEW_BUF_CAPACITY = 128 * 1024;
+
+    public static final class MjpegClient {
+        volatile boolean closed = false;
+    }
 
     public static final class LiveViewFrame {
         public final long seq;
@@ -35,6 +40,7 @@ public class LiveViewManager {
     private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
     private long m_frameSeq = 0;
+    private final LinkedList<MjpegClient> m_mjpegClientList = new LinkedList<MjpegClient>();
     private int m_mjpegClients = 0;
     private volatile boolean m_liveviewRunning = false;
     private Thread m_liveviewThread;
@@ -109,34 +115,39 @@ public class LiveViewManager {
         }
     }
 
-    public boolean tryAcquireMjpegClient() {
+    public MjpegClient acquireMjpegClient() {
         synchronized (m_frameLock) {
-            if (m_mjpegClients >= MAX_MJPEG_CLIENTS) {
-                return false;
+            while (m_mjpegClientList.size() >= MAX_MJPEG_CLIENTS) {
+                MjpegClient oldest = m_mjpegClientList.removeFirst();
+                oldest.closed = true;
             }
-            m_mjpegClients++;
+            MjpegClient client = new MjpegClient();
+            m_mjpegClientList.addLast(client);
+            m_mjpegClients = m_mjpegClientList.size();
             m_frameLock.notifyAll();
-            return true;
+            return client;
         }
     }
 
-    public void releaseMjpegClient() {
+    public void releaseMjpegClient(MjpegClient client) {
         synchronized (m_frameLock) {
-            if (m_mjpegClients > 0) {
-                m_mjpegClients--;
+            if (client != null) {
+                client.closed = true;
+                m_mjpegClientList.remove(client);
             }
+            m_mjpegClients = m_mjpegClientList.size();
             m_frameLock.notifyAll();
         }
     }
 
-    public LiveViewFrame waitForNextFrame(long lastSeq, long timeoutMs) {
+    public LiveViewFrame waitForNextFrame(MjpegClient client, long lastSeq, long timeoutMs) {
         synchronized (m_frameLock) {
             if (m_latestJpeg == null && m_liveviewRunning) {
                 // Trigger an immediate fetch outside frameLock if no frame is cached yet
                 m_frameLock.notifyAll();
             }
             long deadline = System.currentTimeMillis() + timeoutMs;
-            while (m_liveviewRunning && m_frameSeq == lastSeq) {
+            while (m_liveviewRunning && (client == null || !client.closed) && m_frameSeq == lastSeq) {
                 long remaining = deadline - System.currentTimeMillis();
                 if (remaining <= 0) {
                     break;
@@ -147,7 +158,7 @@ public class LiveViewManager {
                     break;
                 }
             }
-            if (!m_liveviewRunning) {
+            if (!m_liveviewRunning || (client != null && client.closed)) {
                 return null;
             }
             // If timed out while still running (e.g. long exposure), return current seq so caller keeps waiting
