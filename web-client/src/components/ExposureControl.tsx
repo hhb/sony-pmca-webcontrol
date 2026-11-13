@@ -109,7 +109,7 @@ export function ExposureControl({
     <section className="panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span>Exposure &amp; Capture</span>
+          <span>Exposure</span>
           {state?.lens?.LensName && (
             <span className="muted-tag">{state.lens.LensName}</span>
           )}
@@ -234,17 +234,6 @@ export function ExposureControl({
             </button>
           </div>
         </div>
-      </div>
-
-      <div className="capture-row">
-        <button
-          type="button"
-          className="btn btn-primary btn-capture"
-          disabled={!connected || busy || state?.capturing}
-          onClick={() => runAction(() => client.takePicture())}
-        >
-          {state?.capturing ? 'Capturing...' : 'Take Picture'}
-        </button>
       </div>
     </section>
   );
