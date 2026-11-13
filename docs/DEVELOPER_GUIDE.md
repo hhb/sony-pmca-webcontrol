@@ -84,4 +84,4 @@ gio mount -u gphoto2://Sony_ILCE-6000_.../
 
 ## 6. CI & Releases
 
-[`.github/workflows/build.yml`](./.github/workflows/build.yml) builds both `sony-pmca-webcontrol-debug-1.0.0.apk` and the self-contained `web-client/dist/index.html` on every push/PR, and publishes them to **GitHub Releases** when pushing a `v*` tag.
+[`.github/workflows/build.yml`](../.github/workflows/build.yml) builds both `sony-pmca-webcontrol-debug-1.0.0.apk` and the self-contained `web-client/dist/index.html` on every push/PR, and publishes them to **GitHub Releases** when pushing a `v*` tag.

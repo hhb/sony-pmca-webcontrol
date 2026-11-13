@@ -30,7 +30,7 @@ Project: **Sony PMCA WebControl** — Android 2.3 (API 10) in-camera HTTP/RPC br
   * Output: single self-contained `web-client/dist/index.html`.
 
 ## Key Documentation
-* [DESIGN.md](./DESIGN.md) — Overall architecture, threading/lock separation, closed-loop control, and LiveView slot design
-* [API.md](./API.md) — HTTP/RPC endpoints, `highlevel` targets, `/api/events`, and `/api/liveview*`
-* [USER_GUIDE.md](./USER_GUIDE.md) — Camera compatibility, flashing, and user operation
-* [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) — Build setup, testing loop, and extension points
+* [docs/DESIGN.md](./docs/DESIGN.md) — Overall architecture, threading/lock separation, closed-loop control, and LiveView slot design
+* [docs/API.md](./docs/API.md) — HTTP/RPC endpoints, `highlevel` targets, `/api/events`, and `/api/liveview*`
+* [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) — Camera compatibility, flashing, and user operation
+* [docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md) — Build setup, testing loop, and extension points
