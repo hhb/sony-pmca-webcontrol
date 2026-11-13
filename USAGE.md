@@ -96,7 +96,7 @@ Executes sequentially on the camera main thread in a single HTTP round-trip. **C
 
 #### Security Blacklist
 To prevent destabilizing the camera session or overwriting event hooks, the following are blocked:
-* `open`, `reopen`, `release`, `getNormalCamera`, `create*`, `withSupportedParameters`, `tryIgnoreInhibit`
+* `open`, `reopen`, `release`, `getNormalCamera`, `create*`, `withSupportedParameters`, `tryIgnoreInhibit`, `shiftFocusPosition` (blocks/hangs on ILCE-6000 main thread)
 * All `set*Listener`, `set*Callback`, and methods taking interface/callback arguments (callbacks are handled centrally and streamed via `/api/events`).
 
 > **Caution (Preview Pipeline Rebuild):** Setting structural parameters such as `setImageSize`, `setImageAspectRatio`, `setRawRecMode`, `setPictureStorageFormat`, or `setDriveMode` may cause the camera firmware to rebuild its preview pipeline, briefly interrupting `/api/liveview.jpg`.

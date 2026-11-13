@@ -42,7 +42,7 @@ public class RpcDispatcher {
             "createEmptyParameters", "createParametersModifier",
             "createGammaTable", "createGammmaTable",
             "withSupportedParameters", "disableSettingChangedTypes", "enableSettingChangedTypes",
-            "setAutoPictureReviewControl", "setRecordingMedia"
+            "setAutoPictureReviewControl", "setRecordingMedia", "shiftFocusPosition"
     ));
 
     private static final Set<String> MODIFIER_BLACKLIST = new HashSet<String>(Arrays.asList(

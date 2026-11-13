@@ -199,18 +199,13 @@ function toggleMfAssist() {
   }
 }
 
-// Focus stepping: tries shiftFocusPosition first; falls back to startOneShotFocusDrive closed-loop
+// Focus stepping: closed-loop drive using startOneShotFocusDrive
 async function stepFocus(delta) {
   if (st.focusBusy) return;
   st.focusBusy = true;
   try {
     const startPos = st.curFocus;
     const target = Math.max(0, st.maxFocus > 0 ? Math.min(st.maxFocus, startPos + delta) : startPos + delta);
-    const res = await cam('shiftFocusPosition', [delta]);
-    if (res && res.result === true) {
-      st.focusBusy = false;
-      return;
-    }
     let retries = 0;
     while (st.curFocus !== target && retries < 10) {
       const diff = target - st.curFocus;

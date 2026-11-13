@@ -177,15 +177,6 @@ class SonyPmcaClient:
             return cur
 
         seq = st.get("seq", 0)
-        delta = target_pos - cur
-        moved = self.camera("shiftFocusPosition", delta)
-        if moved is True:
-            ev = self.wait_for_event("FocusDrive", since=seq, timeout=2.0)
-            if ev:
-                cur = int(ev.get("data", {}).get("currentPosition", cur))
-                if cur == target_pos:
-                    return cur
-
         deadline = time.time() + timeout
         stalled = 0
         while cur != target_pos and time.time() < deadline and stalled < 10:
