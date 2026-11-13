@@ -12,12 +12,6 @@ export type RpcTarget =
   | 'static:ScalarProperties'
   | string;
 
-export interface RpcCall {
-  target: RpcTarget;
-  method: string;
-  args?: unknown[];
-}
-
 export interface RpcResult<T = unknown> {
   ok: boolean;
   target: string;
@@ -169,10 +163,6 @@ export class CameraClient {
     this.baseUrl = saveCameraUrl(url);
   }
 
-  getBaseUrl(): string {
-    return this.baseUrl;
-  }
-
   private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
@@ -198,17 +188,6 @@ export class CameraClient {
       body: JSON.stringify({ target, method, args }),
     });
     return data.result as T;
-  }
-
-  async callBatch(calls: RpcCall[]): Promise<RpcResult[]> {
-    const data = await this.requestJson<{ ok: boolean; results: RpcResult[] }>(
-      '/api/call',
-      {
-        method: 'POST',
-        body: JSON.stringify({ calls }),
-      },
-    );
-    return data.results;
   }
 
   async describe(target?: string, q?: string): Promise<DescribeResponse> {

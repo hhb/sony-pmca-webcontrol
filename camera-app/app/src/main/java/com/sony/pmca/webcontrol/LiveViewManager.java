@@ -46,7 +46,6 @@ public class LiveViewManager {
     private long m_lastLiveviewFetchMs = 0;
     private long m_frameSeq = 0;
     private final ArrayList<MjpegClient> m_mjpegClientList = new ArrayList<MjpegClient>(MAX_MJPEG_CLIENTS);
-    private int m_mjpegClients = 0;
     private volatile boolean m_liveviewRunning = false;
     private Thread m_liveviewThread;
 
@@ -120,10 +119,6 @@ public class LiveViewManager {
         }
     }
 
-    public MjpegClient acquireMjpegClient() {
-        return acquireMjpegClient(null);
-    }
-
     public MjpegClient acquireMjpegClient(String cid) {
         String normalizedCid = normalizeCid(cid);
         synchronized (m_frameLock) {
@@ -142,7 +137,6 @@ public class LiveViewManager {
             }
             MjpegClient client = new MjpegClient(normalizedCid);
             m_mjpegClientList.add(client);
-            m_mjpegClients = m_mjpegClientList.size();
             m_frameLock.notifyAll();
             return client;
         }
@@ -164,7 +158,6 @@ public class LiveViewManager {
                 }
             }
             if (closedAny) {
-                m_mjpegClients = m_mjpegClientList.size();
                 m_frameLock.notifyAll();
             }
         }
@@ -183,7 +176,6 @@ public class LiveViewManager {
                 client.closed = true;
                 m_mjpegClientList.remove(client);
             }
-            m_mjpegClients = m_mjpegClientList.size();
             m_frameLock.notifyAll();
         }
     }
@@ -243,7 +235,7 @@ public class LiveViewManager {
         while (m_liveviewRunning) {
             long intervalMs;
             synchronized (m_frameLock) {
-                while (m_liveviewRunning && m_mjpegClients <= 0) {
+                while (m_liveviewRunning && m_mjpegClientList.isEmpty()) {
                     try {
                         m_frameLock.wait(500);
                     } catch (InterruptedException ignored) {
@@ -252,9 +244,10 @@ public class LiveViewManager {
                 if (!m_liveviewRunning) {
                     break;
                 }
-                if (m_mjpegClients <= 1) {
+                int clientCount = m_mjpegClientList.size();
+                if (clientCount <= 1) {
                     intervalMs = 33;
-                } else if (m_mjpegClients == 2) {
+                } else if (clientCount == 2) {
                     intervalMs = 50;
                 } else {
                     intervalMs = 85;

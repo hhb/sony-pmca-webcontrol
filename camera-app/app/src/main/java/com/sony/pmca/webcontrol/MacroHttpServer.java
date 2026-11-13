@@ -140,7 +140,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 return addCors(res);
             }
 
-            if ("/api/photos/latest".equals(uri) || "/api/capture/last.jpg".equals(uri)) {
+            if ("/api/photos/latest".equals(uri)) {
                 byte[] inMem = m_activity.getLiveViewManager().getLastCapturedJpeg();
                 if (inMem != null && inMem.length > 0) {
                     Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(inMem));
