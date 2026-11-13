@@ -1,11 +1,11 @@
 """Zero-dependency Python client SDK for Sony PMCA WebControl.
 
-Built on top of the thin camera REST API:
-- /api/state, /api/events (long-polling)
-- /api/camera/<action> (CameraEx commands & queries)
-- /api/modifier (reflection proxy for CameraEx.ParametersModifier)
-- /api/params (raw android.hardware.Camera.Parameters)
-- /api/liveview.jpg, /api/photos*
+Built on top of the general RPC + event bus camera API:
+- POST /api/call        (single or batched reflective calls to camera, modifier, params, static:*)
+- GET  /api/describe    (introspect all callable targets, methods, and signatures)
+- GET  /api/state       (latest listener state snapshot)
+- GET  /api/events      (long-polling callback event stream)
+- GET  /api/liveview.jpg, /api/photos*
 """
 
 import json
@@ -48,6 +48,60 @@ class SonyPmcaClient:
         with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
             return resp.read()
 
+    # --- General Reflective RPC (/api/call & /api/describe) ---
+
+    def describe(self, target: Optional[str] = None, query: Optional[str] = None) -> Dict[str, Any]:
+        """List all callable targets, method names, parameter types, and return types."""
+        qs = urllib.parse.urlencode(
+            {k: v for k, v in (("target", target), ("q", query)) if v is not None}
+        )
+        return self._request_json("/api/describe" + (f"?{qs}" if qs else ""))
+
+    def call(self, target: str, method: str, *args: Any) -> Any:
+        """Invoke a single method on target ('camera', 'modifier', 'params', or 'static:<Class>')."""
+        res = self._request_json(
+            "/api/call",
+            method="POST",
+            body={"target": target, "method": method, "args": list(args)},
+        )
+        return res.get("result")
+
+    def batch_call(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute multiple calls sequentially on the camera main thread in one HTTP round-trip.
+
+        Consecutive modifier set* calls are automatically coalesced into one setParameters().
+        """
+        res = self._request_json("/api/call", method="POST", body={"calls": calls})
+        return res.get("results", [])
+
+    def camera(self, method: str, *args: Any) -> Any:
+        """Shortcut for call('camera', method, *args)."""
+        return self.call("camera", method, *args)
+
+    def modifier(self, method: str, *args: Any) -> Any:
+        """Shortcut for call('modifier', method, *args)."""
+        return self.call("modifier", method, *args)
+
+    def params(self, method: str, *args: Any) -> Any:
+        """Shortcut for call('params', method, *args)."""
+        return self.call("params", method, *args)
+
+    def static(self, class_name: str, method: str, *args: Any) -> Any:
+        """Shortcut for call('static:<class_name>', method, *args)."""
+        return self.call(f"static:{class_name}", method, *args)
+
+    def capabilities(self) -> Dict[str, Any]:
+        """Return CameraEx.LensInfo and all ParametersModifier is*Supported() flags."""
+        return self.camera("capabilities")
+
+    def get_battery(self) -> Dict[str, Any]:
+        """Read Android battery percentage and charging status."""
+        return self.static("System", "getBattery")
+
+    def get_temperature(self) -> Dict[str, Any]:
+        """Read Sony Temperature.Status."""
+        return self.static("Temperature", "getStatus")
+
     # --- State & Event Long-Polling ---
 
     def get_state(self) -> Dict[str, Any]:
@@ -78,57 +132,6 @@ class SonyPmcaClient:
                 if ev.get("type") == event_type:
                     return ev
         return None
-
-    # --- Raw CameraEx Commands ---
-
-    def camera(self, action: str, **params: Any) -> Dict[str, Any]:
-        """Call any whitelisted /api/camera/<action> endpoint."""
-        qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-        path = f"/api/camera/{action}" + (f"?{qs}" if qs else "")
-        method = "GET" if action in ("capabilities", "getLensInfo", "getInhibitionInfo") else "POST"
-        return self._request_json(path, method=method)
-
-    def capabilities(self) -> Dict[str, Any]:
-        """Query CameraEx.LensInfo and all ParametersModifier is*Supported() flags."""
-        return self.camera("capabilities")
-
-    # --- Raw ParametersModifier Reflection Proxy ---
-
-    def modifier_list(self) -> Dict[str, Any]:
-        """List all available ParametersModifier methods and their signatures."""
-        return self._request_json("/api/modifier")
-
-    def modifier_get(self, method_name: str, *args: Any) -> Any:
-        """Invoke a ParametersModifier getter/query and return its `result`."""
-        qs = urllib.parse.urlencode({f"arg{i}": a for i, a in enumerate(args)})
-        path = f"/api/modifier/{method_name}" + (f"?{qs}" if qs else "")
-        return self._request_json(path).get("result")
-
-    def modifier_batch_get(self, *method_names: str) -> Dict[str, Any]:
-        """Read multiple parameterless ParametersModifier getters in a single IPC call."""
-        qs = urllib.parse.urlencode({"get": ",".join(method_names)})
-        return self._request_json(f"/api/modifier?{qs}").get("results", {})
-
-    def modifier_set(self, method_name: str, *args: Any) -> Dict[str, Any]:
-        """Invoke a ParametersModifier setter."""
-        body: Dict[str, Any] = {"args": list(args)} if len(args) > 1 else {"v": args[0] if args else None}
-        return self._request_json(f"/api/modifier/{method_name}", method="POST", body=body)
-
-    def modifier_batch_set(self, **assignments: Any) -> Dict[str, Any]:
-        """Apply multiple ParametersModifier setters in one setParameters() call."""
-        return self._request_json("/api/modifier", method="POST", body=assignments)
-
-    # --- Raw android.hardware.Camera.Parameters ---
-
-    def params_get(self, key: Optional[str] = None) -> Any:
-        """Read all or a single key from Camera.Parameters."""
-        if key:
-            return self._request_json(f"/api/params/{urllib.parse.quote(key)}").get("value")
-        return self._request_json("/api/params").get("params", {})
-
-    def params_set(self, **updates: Any) -> Dict[str, Any]:
-        """Set raw key-value pairs on Camera.Parameters."""
-        return self._request_json("/api/params", method="POST", body=updates)
 
     # --- LiveView & Photo Downloads ---
 
@@ -174,17 +177,15 @@ class SonyPmcaClient:
             return cur
 
         seq = st.get("seq", 0)
-        # Try direct shiftFocusPosition first
         delta = target_pos - cur
-        res = self.camera("shiftFocusPosition", n=delta)
-        if res.get("result") is True:
+        moved = self.camera("shiftFocusPosition", delta)
+        if moved is True:
             ev = self.wait_for_event("FocusDrive", since=seq, timeout=2.0)
             if ev:
                 cur = int(ev.get("data", {}).get("currentPosition", cur))
                 if cur == target_pos:
                     return cur
 
-        # Closed-loop fallback via startOneShotFocusDrive
         deadline = time.time() + timeout
         stalled = 0
         while cur != target_pos and time.time() < deadline and stalled < 10:
@@ -192,7 +193,7 @@ class SonyPmcaClient:
             direction = self.FOCUS_FAR if diff > 0 else self.FOCUS_NEAR
             abs_d = abs(diff)
             speed = 4 if abs_d > 25 else 3 if abs_d > 15 else 2 if abs_d > 6 else 1
-            self.camera("startOneShotFocusDrive", dir=direction, speed=speed)
+            self.camera("startOneShotFocusDrive", direction, speed)
             ev = self.wait_for_event("FocusDrive", since=seq, timeout=1.0)
             if ev:
                 seq = ev.get("seq", seq)
@@ -219,12 +220,9 @@ class SonyPmcaClient:
         filename = f"photo_{int(time.time())}.jpg"
         if ev:
             data = ev.get("data", {})
-            dir_name = data.get("DirectoryName")
             file_name = data.get("FileName")
             if file_name:
                 filename = file_name
-            if dir_name and file_name:
-                # Try locating matching SD card path from /api/photos
                 for p in self.list_photos(limit=10):
                     if p.get("name") == file_name:
                         remote_path = p.get("path")

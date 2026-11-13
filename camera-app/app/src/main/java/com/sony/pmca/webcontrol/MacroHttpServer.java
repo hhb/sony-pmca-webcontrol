@@ -1,7 +1,5 @@
 package com.sony.pmca.webcontrol;
 
-import android.util.Pair;
-
 import com.sony.scalar.hardware.CameraEx;
 
 import org.json.JSONArray;
@@ -12,8 +10,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +57,29 @@ public class MacroHttpServer extends NanoHTTPD {
         try {
             if ("/".equals(uri) || "/index.html".equals(uri)) {
                 return serveAssetHtml("index.html");
+            }
+
+            if ("/api/describe".equals(uri)) {
+                JSONObject desc = m_activity.getRpcDispatcher().describe(params.get("target"), params.get("q"));
+                return jsonOk(desc.toString());
+            }
+
+            if ("/api/call".equals(uri)) {
+                if (!Method.POST.equals(method)) {
+                    return jsonError(Response.Status.METHOD_NOT_ALLOWED, "Use POST /api/call with JSON body");
+                }
+                final CameraEx cam = m_activity.getCameraEx();
+                if (cam == null) {
+                    return jsonError(Response.Status.INTERNAL_ERROR, "Camera not initialized");
+                }
+                final JSONObject body = parseJsonBody(session);
+                JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
+                    @Override
+                    public JSONObject call() throws Exception {
+                        return m_activity.getRpcDispatcher().executeBatchOrSingle(m_activity, cam, body);
+                    }
+                }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
+                return jsonOk(res.toString());
             }
 
             if ("/api/state".equals(uri)) {
@@ -122,12 +141,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 if (path == null || path.trim().isEmpty()) {
                     path = params.get("file");
                 }
-                File target = null;
-                if (path != null && !path.trim().isEmpty()) {
-                    target = new File(path.trim());
-                } else {
-                    target = m_activity.getLatestPhotoFile();
-                }
+                File target = (path != null && !path.trim().isEmpty()) ? new File(path.trim()) : m_activity.getLatestPhotoFile();
                 if (target == null || !target.exists() || !target.isFile()) {
                     return jsonError(Response.Status.NOT_FOUND, "Photo file not found");
                 }
@@ -138,19 +152,6 @@ public class MacroHttpServer extends NanoHTTPD {
                 return addCors(new Response(Response.Status.OK, MIME_PLAINTEXT, m_activity.getCrashLogText()));
             }
 
-            if (uri.startsWith("/api/camera/")) {
-                String action = uri.substring("/api/camera/".length());
-                return handleCameraAction(action, params);
-            }
-
-            if ("/api/modifier".equals(uri) || uri.startsWith("/api/modifier/")) {
-                return handleModifier(uri, method, params, session);
-            }
-
-            if ("/api/params".equals(uri) || uri.startsWith("/api/params/")) {
-                return handleRawParams(uri, method, params, session);
-            }
-
             return jsonError(Response.Status.NOT_FOUND, "Unknown endpoint: " + uri);
         } catch (TimeoutException te) {
             return jsonError(STATUS_GATEWAY_TIMEOUT, te.getMessage());
@@ -158,251 +159,6 @@ public class MacroHttpServer extends NanoHTTPD {
             Throwable cause = t.getCause() != null ? t.getCause() : t;
             return jsonError(Response.Status.INTERNAL_ERROR, cause.toString());
         }
-    }
-
-    private Response handleCameraAction(final String action, final Map<String, String> params) throws Exception {
-        final CameraEx cam = m_activity.getCameraEx();
-        if (cam == null) {
-            return jsonError(Response.Status.INTERNAL_ERROR, "Camera not initialized");
-        }
-
-        if ("capabilities".equals(action)) {
-            JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                @Override
-                public JSONObject call() {
-                    JSONObject lens = m_activity.buildLensInfoJson();
-                    return m_activity.getModifierProxy().getCapabilities(cam, lens);
-                }
-            }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-            return jsonOk(res.toString());
-        }
-
-        if ("getLensInfo".equals(action)) {
-            JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                @Override
-                public JSONObject call() throws Exception {
-                    JSONObject out = new JSONObject();
-                    out.put("ok", true);
-                    out.put("lens", m_activity.buildLensInfoJson());
-                    return out;
-                }
-            }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-            return jsonOk(res.toString());
-        }
-
-        if ("getInhibitionInfo".equals(action)) {
-            JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                @Override
-                public JSONObject call() throws Exception {
-                    JSONObject out = new JSONObject();
-                    out.put("ok", true);
-                    out.put("inhibitionInfo", cam.getInhibitionInfo());
-                    return out;
-                }
-            }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-            return jsonOk(res.toString());
-        }
-
-        JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-            @Override
-            public JSONObject call() throws Exception {
-                JSONObject out = new JSONObject();
-                out.put("ok", true);
-                out.put("action", action);
-
-                if ("incrementAperture".equals(action)) {
-                    cam.incrementAperture();
-                } else if ("decrementAperture".equals(action)) {
-                    cam.decrementAperture();
-                } else if ("adjustAperture".equals(action)) {
-                    int n = parseInt(firstNonNull(params.get("n"), params.get("steps")), 0);
-                    cam.adjustAperture(n);
-                } else if ("incrementShutterSpeed".equals(action)) {
-                    cam.incrementShutterSpeed();
-                } else if ("decrementShutterSpeed".equals(action)) {
-                    cam.decrementShutterSpeed();
-                } else if ("adjustShutterSpeed".equals(action)) {
-                    int n = parseInt(firstNonNull(params.get("n"), params.get("steps")), 0);
-                    cam.adjustShutterSpeed(n);
-                } else if ("adjustProgramLine".equals(action)) {
-                    int n = parseInt(firstNonNull(params.get("n"), params.get("steps")), 0);
-                    cam.adjustProgramLine(n);
-                } else if ("startOneShotFocusDrive".equals(action)) {
-                    int dir = parseInt(params.get("dir"), CameraEx.FOCUS_DRIVE_DIRECTION_FAR);
-                    int speed = parseInt(params.get("speed"), 2);
-                    cam.startOneShotFocusDrive(dir, speed);
-                } else if ("shiftFocusPosition".equals(action)) {
-                    int n = parseInt(params.get("n"), 0);
-                    boolean moved = cam.shiftFocusPosition(n);
-                    out.put("result", moved);
-                } else if ("startFocusHold".equals(action)) {
-                    cam.startFocusHold();
-                } else if ("stopFocusHold".equals(action)) {
-                    cam.stopFocusHold();
-                } else if ("executeAutoFocusStartTrigger".equals(action)) {
-                    boolean halfPress = !"false".equalsIgnoreCase(params.get("halfPress"));
-                    String mode = params.get("mode");
-                    cam.executeAutoFocusStartTrigger(halfPress, mode);
-                } else if ("startZoom".equals(action)) {
-                    int dir = parseInt(params.get("dir"), CameraEx.ZOOM_DIRECTION_TELE);
-                    int speed = parseInt(params.get("speed"), 2);
-                    cam.startZoom(dir, speed);
-                } else if ("stopZoom".equals(action)) {
-                    cam.stopZoom();
-                } else if ("setDigitalZoom".equals(action)) {
-                    int v = parseInt(params.get("v"), 100);
-                    cam.setDigitalZoom(v);
-                } else if ("resetDigitalZoom".equals(action)) {
-                    cam.resetDigitalZoom();
-                } else if ("setPreviewMagnification".equals(action)) {
-                    int ratio = parseInt(params.get("ratio"), 0);
-                    int x = parseInt(params.get("x"), 0);
-                    int y = parseInt(params.get("y"), 0);
-                    cam.setPreviewMagnification(ratio, new Pair<Integer, Integer>(x, y));
-                } else if ("stopPreviewMagnification".equals(action)) {
-                    cam.stopPreviewMagnification();
-                } else if ("burstableTakePicture".equals(action)) {
-                    cam.burstableTakePicture();
-                } else if ("cancelTakePicture".equals(action)) {
-                    cam.cancelTakePicture();
-                } else if ("cancelExposure".equals(action)) {
-                    cam.cancelExposure();
-                } else {
-                    throw new IllegalArgumentException("Unknown camera action: " + action);
-                }
-                return out;
-            }
-        }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-
-        return jsonOk(res.toString());
-    }
-
-    private Response handleModifier(String uri, Method method, final Map<String, String> params, IHTTPSession session) throws Exception {
-        final CameraEx cam = m_activity.getCameraEx();
-        if (cam == null) {
-            return jsonError(Response.Status.INTERNAL_ERROR, "Camera not initialized");
-        }
-        final ModifierProxy proxy = m_activity.getModifierProxy();
-
-        if ("/api/modifier".equals(uri)) {
-            if (Method.GET.equals(method)) {
-                final String getList = params.get("get");
-                if (getList == null || getList.trim().isEmpty()) {
-                    return jsonOk(proxy.listMethodsJson().toString());
-                }
-                final List<String> names = Arrays.asList(getList.split(","));
-                JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                    @Override
-                    public JSONObject call() throws Exception {
-                        return proxy.invokeBatchGet(cam, names);
-                    }
-                }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-                return jsonOk(res.toString());
-            } else if (Method.POST.equals(method)) {
-                final JSONObject body = parseJsonBody(session);
-                JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                    @Override
-                    public JSONObject call() throws Exception {
-                        return proxy.invokeBatchSet(cam, body);
-                    }
-                }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-                return jsonOk(res.toString());
-            }
-            return jsonError(Response.Status.METHOD_NOT_ALLOWED, "Unsupported method");
-        }
-
-        final String methodName = uri.substring("/api/modifier/".length());
-        if (!proxy.hasMethod(methodName)) {
-            return jsonError(Response.Status.NOT_FOUND, "Unknown modifier method: " + methodName);
-        }
-
-        final List<String> rawArgs = extractArgs(params, Method.POST.equals(method) ? session : null);
-        JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-            @Override
-            public JSONObject call() throws Exception {
-                if (methodName.startsWith("set")) {
-                    return proxy.invokeSet(cam, methodName, rawArgs);
-                }
-                return proxy.invokeGet(cam, methodName, rawArgs);
-            }
-        }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-        return jsonOk(res.toString());
-    }
-
-    private Response handleRawParams(String uri, Method method, final Map<String, String> params, IHTTPSession session) throws Exception {
-        final CameraEx cam = m_activity.getCameraEx();
-        if (cam == null) {
-            return jsonError(Response.Status.INTERNAL_ERROR, "Camera not initialized");
-        }
-
-        if (Method.GET.equals(method)) {
-            final String key = uri.length() > "/api/params/".length() ? uri.substring("/api/params/".length()) : null;
-            JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                @Override
-                public JSONObject call() throws Exception {
-                    JSONObject all = m_activity.getRawParamsJson();
-                    JSONObject out = new JSONObject();
-                    out.put("ok", true);
-                    if (key != null && !key.isEmpty()) {
-                        out.put("key", key);
-                        out.put("value", all.has(key) ? all.get(key) : JSONObject.NULL);
-                    } else {
-                        out.put("params", all);
-                    }
-                    return out;
-                }
-            }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-            return jsonOk(res.toString());
-        }
-
-        if (Method.POST.equals(method)) {
-            final JSONObject updates = parseJsonBody(session);
-            for (Map.Entry<String, String> e : params.entrySet()) {
-                if (!"NanoHttpd.QUERY_STRING".equals(e.getKey()) && !updates.has(e.getKey())) {
-                    updates.put(e.getKey(), e.getValue());
-                }
-            }
-            JSONObject res = m_activity.runOnMainSync(new Callable<JSONObject>() {
-                @Override
-                public JSONObject call() throws Exception {
-                    m_activity.setRawParams(updates);
-                    JSONObject out = new JSONObject();
-                    out.put("ok", true);
-                    return out;
-                }
-            }, MacroServerActivity.MAIN_THREAD_TIMEOUT_MS);
-            return jsonOk(res.toString());
-        }
-
-        return jsonError(Response.Status.METHOD_NOT_ALLOWED, "Unsupported method");
-    }
-
-    private List<String> extractArgs(Map<String, String> params, IHTTPSession postSession) throws Exception {
-        List<String> args = new ArrayList<String>();
-        if (params.containsKey("v")) {
-            args.add(params.get("v"));
-            return args;
-        }
-        if (params.containsKey("arg0")) {
-            for (int i = 0; i < 5; i++) {
-                String k = "arg" + i;
-                if (!params.containsKey(k)) break;
-                args.add(params.get(k));
-            }
-            return args;
-        }
-        if (postSession != null) {
-            JSONObject body = parseJsonBody(postSession);
-            if (body.has("v")) {
-                args.add(String.valueOf(body.get("v")));
-            } else if (body.has("args") && body.get("args") instanceof JSONArray) {
-                JSONArray ja = body.getJSONArray("args");
-                for (int i = 0; i < ja.length(); i++) {
-                    args.add(String.valueOf(ja.get(i)));
-                }
-            }
-        }
-        return args;
     }
 
     private JSONObject parseJsonBody(IHTTPSession session) throws Exception {
@@ -459,10 +215,6 @@ public class MacroHttpServer extends NanoHTTPD {
         res.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         res.addHeader("Access-Control-Allow-Headers", "Content-Type");
         return res;
-    }
-
-    private static String firstNonNull(String a, String b) {
-        return a != null ? a : b;
     }
 
     private static int parseInt(String s, int def) {

@@ -66,19 +66,19 @@
     </div>
     <div class="row">
       <span class="lbl">Zoom / MF</span>
-      <button onmousedown="cam('startZoom?dir=1&speed=2')" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom?dir=1&speed=2')" ontouchend="cam('stopZoom')">Zoom Out</button>
-      <button onmousedown="cam('startZoom?dir=0&speed=2')" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom?dir=0&speed=2')" ontouchend="cam('stopZoom')">Zoom In</button>
+      <button onmousedown="cam('startZoom', [1, 2])" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom', [1, 2])" ontouchend="cam('stopZoom')">Zoom Out</button>
+      <button onmousedown="cam('startZoom', [0, 2])" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom', [0, 2])" ontouchend="cam('stopZoom')">Zoom In</button>
       <button onclick="cam('resetDigitalZoom')">1.0x</button>
-      <button onclick="cam('setDigitalZoom?v=140')">1.4x</button>
-      <button onclick="cam('setDigitalZoom?v=200')">2.0x</button>
-      <button onclick="cam('setDigitalZoom?v=400')">4.0x</button>
+      <button onclick="cam('setDigitalZoom', [140])">1.4x</button>
+      <button onclick="cam('setDigitalZoom', [200])">2.0x</button>
+      <button onclick="cam('setDigitalZoom', [400])">4.0x</button>
       <button id="mfBtn" onclick="toggleMfAssist()">MF Assist</button>
     </div>
     <div class="row">
       <span class="lbl">Capture</span>
       <button class="pri" onclick="cam('burstableTakePicture')">Take Photo</button>
       <a class="btn succ" href="/api/photos/latest" download="photo_latest.jpg">&#11015; Download Last Photo</a>
-      <button onclick="cam('executeAutoFocusStartTrigger?halfPress=true')">AF Trigger</button>
+      <button onclick="cam('executeAutoFocusStartTrigger', [true, null])">AF Trigger</button>
     </div>
     <div class="msg" id="msg"></div>
   </div>
@@ -97,8 +97,13 @@ function setMsg(t) {
   document.getElementById('msg').textContent = t || '';
 }
 
-async function apiJson(url, opts) {
-  const r = await fetch(url, opts);
+async function rpc(target, method, args) {
+  setMsg('');
+  const r = await fetch('/api/call', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, method, args: args || [] })
+  });
   const data = await r.json();
   if (!data.ok) {
     setMsg('Error: ' + (data.error || r.status));
@@ -106,9 +111,12 @@ async function apiJson(url, opts) {
   return data;
 }
 
-function cam(actionAndQuery) {
-  setMsg('');
-  return apiJson('/api/camera/' + actionAndQuery, { method: 'POST' });
+function cam(method, args) {
+  return rpc('camera', method, args);
+}
+
+function mod(method, args) {
+  return rpc('modifier', method, args);
 }
 
 function formatShutter(n, d) {
@@ -148,27 +156,38 @@ function applyState(s) {
 
 async function loadIsoOptions() {
   try {
-    const sup = await apiJson('/api/modifier/getSupportedISOSensitivities');
-    const cur = await apiJson('/api/modifier/getISOSensitivity');
+    const r = await fetch('/api/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calls: [
+          { target: 'modifier', method: 'getSupportedISOSensitivities' },
+          { target: 'modifier', method: 'getISOSensitivity' }
+        ]
+      })
+    });
+    const batch = await r.json();
+    if (!batch.ok || !batch.results) return;
+    const list = (batch.results[0] && batch.results[0].result) || [];
+    const cur = batch.results[1] ? batch.results[1].result : undefined;
     const sel = document.getElementById('isoSel');
     sel.innerHTML = '';
-    const list = sup.result || [];
     for (const v of list) {
       const opt = document.createElement('option');
       opt.value = v;
       opt.textContent = v === 0 ? 'ISO AUTO' : 'ISO ' + v;
       sel.appendChild(opt);
     }
-    if (cur.result !== undefined) {
-      sel.value = String(cur.result);
-      document.getElementById('sIso').textContent = cur.result === 0 ? 'AUTO' : String(cur.result);
+    if (cur !== undefined) {
+      sel.value = String(cur);
+      document.getElementById('sIso').textContent = cur === 0 ? 'AUTO' : String(cur);
     }
   } catch (e) {}
 }
 
 async function setIso(v) {
   if (v === '') return;
-  await apiJson('/api/modifier/setISOSensitivity?v=' + encodeURIComponent(v), { method: 'POST' });
+  await mod('setISOSensitivity', [parseInt(v, 10)]);
   document.getElementById('sIso').textContent = v === '0' ? 'AUTO' : v;
 }
 
@@ -176,7 +195,7 @@ function toggleMfAssist() {
   if (st.mfAssistOn) {
     cam('stopPreviewMagnification');
   } else {
-    cam('setPreviewMagnification?ratio=590&x=0&y=0');
+    cam('setPreviewMagnification', [590, [0, 0]]);
   }
 }
 
@@ -187,20 +206,19 @@ async function stepFocus(delta) {
   try {
     const startPos = st.curFocus;
     const target = Math.max(0, st.maxFocus > 0 ? Math.min(st.maxFocus, startPos + delta) : startPos + delta);
-    const res = await cam('shiftFocusPosition?n=' + delta);
+    const res = await cam('shiftFocusPosition', [delta]);
     if (res && res.result === true) {
       st.focusBusy = false;
       return;
     }
-    // Fallback closed-loop drive using startOneShotFocusDrive
     let retries = 0;
     while (st.curFocus !== target && retries < 10) {
       const diff = target - st.curFocus;
-      const dir = diff > 0 ? 1 : 0; // 1 = FAR, 0 = NEAR (CameraEx constants: check)
+      const dir = diff > 0 ? 1 : 0; // 1 = FAR, 0 = NEAR
       const absD = Math.abs(diff);
       const speed = absD > 20 ? 4 : absD > 10 ? 3 : absD > 4 ? 2 : 1;
       const prev = st.curFocus;
-      await cam('startOneShotFocusDrive?dir=' + dir + '&speed=' + speed);
+      await cam('startOneShotFocusDrive', [dir, speed]);
       await new Promise(r => setTimeout(r, 90));
       if (st.curFocus === prev) retries++; else retries = 0;
     }
@@ -255,7 +273,8 @@ function startLiveView() {
 (async function init() {
   startLiveView();
   try {
-    const s = await apiJson('/api/state');
+    const r = await fetch('/api/state');
+    const s = await r.json();
     applyState(s);
     document.getElementById('connState').textContent = 'online';
   } catch (e) {}

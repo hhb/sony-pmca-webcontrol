@@ -58,7 +58,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
 
     private final Handler m_handler = new Handler(Looper.getMainLooper());
     private final CameraEventHub m_eventHub = new CameraEventHub();
-    private final ModifierProxy m_modifierProxy = new ModifierProxy();
+    private final RpcDispatcher m_rpc = new RpcDispatcher();
 
     private FocusScaleView m_focusScaleView;
     private TextView m_tvCameraStatus;
@@ -91,8 +91,8 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         return m_eventHub;
     }
 
-    public ModifierProxy getModifierProxy() {
-        return m_modifierProxy;
+    public RpcDispatcher getRpcDispatcher() {
+        return m_rpc;
     }
 
     public CameraEx getCameraEx() {
@@ -275,7 +275,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     JSONObject data = new JSONObject();
                     try {
                         data.put("status", status);
-                        data.put("focusAreaIds", ModifierProxy.toJsonValue(focusAreaIds));
+                        data.put("focusAreaIds", RpcDispatcher.toJsonValue(focusAreaIds));
                     } catch (Throwable ignored) {
                     }
                     m_eventHub.emit("AutoFocusDone", data);
@@ -405,7 +405,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     try {
                         data.put("enabled", enabled);
                         data.put("ratio", ratio);
-                        data.put("pos", ModifierProxy.toJsonValue(pos));
+                        data.put("pos", RpcDispatcher.toJsonValue(pos));
                     } catch (Throwable ignored) {
                     }
                     m_eventHub.updatePreviewMag(data);
@@ -417,7 +417,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     JSONObject data = new JSONObject();
                     try {
                         data.put("enabled", enabled);
-                        data.put("pos", ModifierProxy.toJsonValue(pos));
+                        data.put("pos", RpcDispatcher.toJsonValue(pos));
                     } catch (Throwable ignored) {
                     }
                     m_eventHub.emit("PreviewMagnificationInfo", data);
@@ -438,7 +438,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     }
                     JSONObject data = new JSONObject();
                     try {
-                        data.put("types", ModifierProxy.toJsonValue(types));
+                        data.put("types", RpcDispatcher.toJsonValue(types));
                     } catch (Throwable ignored) {
                     }
                     m_eventHub.emit("SettingChanged", data);
