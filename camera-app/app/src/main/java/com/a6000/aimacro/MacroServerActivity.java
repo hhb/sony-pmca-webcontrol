@@ -9,6 +9,7 @@ import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.text.format.Formatter;
 import android.util.Pair;
@@ -28,6 +29,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -80,6 +84,7 @@ public class MacroServerActivity extends BaseActivity
     private final Object m_frameLock = new Object();
     private ByteBuffer m_liveviewByteBuf;
     private byte[] m_latestJpeg;
+    private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
 
     private final Runnable m_stopZoomRunnable = new Runnable() {
@@ -100,7 +105,6 @@ public class MacroServerActivity extends BaseActivity
             if ((m_state == State.focusing || m_state == State.bracketing) && m_focusBeforeDrive == m_curFocus) {
                 m_stuckCount++;
                 if (m_stuckCount == 2 && m_camera != null) {
-                    // Re-assert Manual Focus mode in case camera temporarily left MF state
                     try {
                         Camera.Parameters focusParams = m_camera.createEmptyParameters();
                         focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
@@ -183,6 +187,7 @@ public class MacroServerActivity extends BaseActivity
                     if (data != null) {
                         synchronized (m_frameLock) {
                             m_latestJpeg = data;
+                            m_lastCapturedJpeg = data;
                         }
                     }
                 }
@@ -344,8 +349,6 @@ public class MacroServerActivity extends BaseActivity
 
     @SuppressWarnings("unchecked")
     private void initCameraDefaults() {
-        // IMPORTANT: On Sony CameraEx, setParameters MUST use m_camera.createEmptyParameters(),
-        // NEVER m_camera.getNormalCamera().getParameters() (which throws RuntimeException)!
         try {
             Camera.Parameters params = m_camera.createEmptyParameters();
             CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
@@ -363,7 +366,6 @@ public class MacroServerActivity extends BaseActivity
             }
         }
 
-        // Enable Smart / ClearImage / Precision Digital Zoom if supported on this body
         try {
             Camera.Parameters currentParams = m_camera.getNormalCamera().getParameters();
             CameraEx.ParametersModifier curMod = m_camera.createParametersModifier(currentParams);
@@ -563,6 +565,61 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
+    public byte[] getLastCapturedJpeg() {
+        synchronized (m_frameLock) {
+            return m_lastCapturedJpeg;
+        }
+    }
+
+    public List<File> listPhotosOnSdCard(int limit) {
+        List<File> allFiles = new ArrayList<File>();
+        try {
+            File external = Environment.getExternalStorageDirectory();
+            File dcim = new File(external, "DCIM");
+            if (dcim.exists() && dcim.isDirectory()) {
+                scanDirRecursive(dcim, allFiles);
+            }
+            if (allFiles.isEmpty() && external.exists()) {
+                scanDirRecursive(external, allFiles);
+            }
+            Collections.sort(allFiles, new Comparator<File>() {
+                @Override
+                public int compare(File a, File b) {
+                    long diff = b.lastModified() - a.lastModified();
+                    if (diff > 0) return 1;
+                    if (diff < 0) return -1;
+                    return 0;
+                }
+            });
+            if (limit > 0 && allFiles.size() > limit) {
+                return allFiles.subList(0, limit);
+            }
+        } catch (Throwable t) {
+            Logger.error("listPhotosOnSdCard error: " + t.toString());
+        }
+        return allFiles;
+    }
+
+    public File getLatestPhotoFile() {
+        List<File> photos = listPhotosOnSdCard(1);
+        return (!photos.isEmpty()) ? photos.get(0) : null;
+    }
+
+    private void scanDirRecursive(File dir, List<File> results) {
+        File[] sub = dir.listFiles();
+        if (sub == null) return;
+        for (File f : sub) {
+            if (f.isDirectory()) {
+                scanDirRecursive(f, results);
+            } else if (f.isFile()) {
+                String name = f.getName().toLowerCase();
+                if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".arw")) {
+                    results.add(f);
+                }
+            }
+        }
+    }
+
     public String getCrashLogText() {
         File f = Logger.getFile();
         if (!f.exists()) {
@@ -688,7 +745,6 @@ public class MacroServerActivity extends BaseActivity
                     return;
                 }
                 try {
-                    // 1. Focus Assist Preview Magnification (e.g. 0=off, 100=1x, 590=5.9x, 1170=11.7x)
                     if (previewMag != null) {
                         if (previewMag <= 0) {
                             m_camera.stopPreviewMagnification();
@@ -701,7 +757,6 @@ public class MacroServerActivity extends BaseActivity
                         return;
                     }
 
-                    // 2. Direct Digital Zoom magnification (100=1.0x, 140=1.4x, 200=2.0x, 400=4.0x)
                     if (digitalMag != null) {
                         if (digitalMag <= 100) {
                             m_camera.resetDigitalZoom();
@@ -714,7 +769,6 @@ public class MacroServerActivity extends BaseActivity
                         return;
                     }
 
-                    // 3. Power Zoom / Motor Zoom (in = TELE = 0, out = WIDE = 1)
                     if ("stop".equalsIgnoreCase(action)) {
                         m_handler.removeCallbacks(m_stopZoomRunnable);
                         m_camera.stopZoom();
@@ -726,7 +780,6 @@ public class MacroServerActivity extends BaseActivity
                     m_handler.removeCallbacks(m_stopZoomRunnable);
                     m_camera.startZoom(zoomDir, 2);
 
-                    // Also step digital zoom if user clicks step and optical zoom doesn't move
                     if (!"start".equalsIgnoreCase(action)) {
                         m_handler.postDelayed(m_stopZoomRunnable, 140);
                     }

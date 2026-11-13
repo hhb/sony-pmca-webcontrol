@@ -1,6 +1,10 @@
 package com.a6000.aimacro;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.util.List;
 import java.util.Map;
 
 import fi.iki.elonen.NanoHTTPD;
@@ -49,6 +53,55 @@ public class MacroHttpServer extends NanoHTTPD {
             Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(jpeg));
             res.addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
             return addCors(res);
+        }
+
+        if ("/api/photos/latest".equals(uri) || "/api/capture/last.jpg".equals(uri)) {
+            // First check memory buffer from last shutter event
+            byte[] inMem = m_activity.getLastCapturedJpeg();
+            if (inMem != null && inMem.length > 0) {
+                Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(inMem));
+                res.addHeader("Content-Disposition", "attachment; filename=\"latest_capture.jpg\"");
+                return addCors(res);
+            }
+            // Fallback to SD card file
+            File latest = m_activity.getLatestPhotoFile();
+            if (latest != null && latest.exists() && latest.isFile()) {
+                return serveFileDownload(latest);
+            }
+            return jsonError(Response.Status.NOT_FOUND, "No captured photo available yet");
+        }
+
+        if ("/api/photos".equals(uri)) {
+            int limit = parseInt(params.get("limit"), 50);
+            List<File> list = m_activity.listPhotosOnSdCard(limit);
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"ok\":true,\"count\":").append(list.size()).append(",\"photos\":[");
+            for (int i = 0; i < list.size(); i++) {
+                File f = list.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{");
+                sb.append("\"name\":\"").append(f.getName()).append("\",");
+                sb.append("\"path\":\"").append(f.getAbsolutePath().replace("\\", "/")).append("\",");
+                sb.append("\"size\":").append(f.length()).append(",");
+                sb.append("\"modified\":").append(f.lastModified());
+                sb.append("}");
+            }
+            sb.append("]}");
+            return jsonOk(sb.toString());
+        }
+
+        if ("/api/photos/download".equals(uri)) {
+            String path = params.get("path");
+            File target = null;
+            if (path != null && !path.trim().isEmpty()) {
+                target = new File(path.trim());
+            } else {
+                target = m_activity.getLatestPhotoFile();
+            }
+            if (target == null || !target.exists() || !target.isFile()) {
+                return jsonError(Response.Status.NOT_FOUND, "Photo file not found: " + path);
+            }
+            return serveFileDownload(target);
         }
 
         if ("/api/focus/drive".equals(uri)) {
@@ -109,6 +162,25 @@ public class MacroHttpServer extends NanoHTTPD {
         return jsonError(Response.Status.NOT_FOUND, "Unknown endpoint: " + uri);
     }
 
+    private Response serveFileDownload(File file) {
+        try {
+            FileInputStream fis = new FileInputStream(file);
+            String nameLower = file.getName().toLowerCase();
+            String mime = "application/octet-stream";
+            if (nameLower.endsWith(".jpg") || nameLower.endsWith(".jpeg")) {
+                mime = "image/jpeg";
+            } else if (nameLower.endsWith(".arw")) {
+                mime = "image/x-sony-arw";
+            }
+            Response res = new Response(Response.Status.OK, mime, fis);
+            res.addHeader("Content-Disposition", "attachment; filename=\"" + file.getName() + "\"");
+            res.addHeader("Content-Length", String.valueOf(file.length()));
+            return addCors(res);
+        } catch (FileNotFoundException e) {
+            return jsonError(Response.Status.NOT_FOUND, "File not found: " + e.getMessage());
+        }
+    }
+
     private Response jsonOk(String json) {
         return addCors(new Response(Response.Status.OK, "application/json", json));
     }
@@ -156,9 +228,10 @@ public class MacroHttpServer extends NanoHTTPD {
             + "img{width:100%;max-height:460px;min-height:240px;object-fit:contain;background:#000;border:1px solid #333;border-radius:6px;display:block}"
             + ".card{background:#1c1c1e;border-radius:8px;padding:12px;margin-top:10px}"
             + ".row{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center;margin:8px 0}"
-            + "button{background:#2c2c2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 14px;font-size:14px;cursor:pointer}"
-            + "button:hover{background:#3a3a3c}button.pri{background:#0a84ff;border-color:#0a84ff}"
-            + "button.warn{background:#ff453a;border-color:#ff453a}"
+            + "button,a.btn{background:#2c2c2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 14px;font-size:14px;cursor:pointer;text-decoration:none;display:inline-block}"
+            + "button:hover,a.btn:hover{background:#3a3a3c}button.pri,a.btn.pri{background:#0a84ff;border-color:#0a84ff}"
+            + "button.succ,a.btn.succ{background:#30d158;border-color:#30d158;color:#000;font-weight:600}"
+            + "button.warn,a.btn.warn{background:#ff453a;border-color:#ff453a}"
             + "input{background:#2c2c2e;color:#fff;border:1px solid #444;border-radius:6px;padding:6px;width:68px;text-align:center}"
             + ".stat{font-family:monospace;font-size:13px;color:#30d158}"
             + "</style></head><body><div class='wrap'>"
@@ -195,7 +268,7 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<button onclick=\"api('/api/zoom?mag=200')\">2.0x</button>"
             + "<button onclick=\"api('/api/zoom?mag=400')\">4.0x</button>"
             + "</div></div>"
-            + "<div class='card'><b>Exposure &amp; Capture</b><div class='row'>"
+            + "<div class='card'><b>Exposure, Capture &amp; Download</b><div class='row'>"
             + "<button onclick=\"api('/api/exposure?aperture=dec')\">F -</button>"
             + "<button onclick=\"api('/api/exposure?aperture=inc')\">F +</button>"
             + "<button onclick=\"api('/api/exposure?shutter=dec')\">Shutter -</button>"
@@ -204,7 +277,9 @@ public class MacroHttpServer extends NanoHTTPD {
             + "<button onclick=\"api('/api/exposure?iso=100')\">ISO 100</button>"
             + "<button onclick=\"api('/api/exposure?iso=400')\">ISO 400</button>"
             + "<button onclick=\"api('/api/exposure?iso=1600')\">ISO 1600</button>"
-            + "<button class='pri' onclick=\"api('/api/capture')\">Capture</button>"
+            + "</div><div class='row'>"
+            + "<button class='pri' onclick=\"api('/api/capture')\">Take Photo</button>"
+            + "<a class='btn succ' href='/api/photos/latest' download='photo_latest.jpg'>&#11015; Download Last Photo</a>"
             + "</div></div></div>"
             + "<script>"
             + "var curFocus=0,lv=document.getElementById('lv'),prevUrl=null;"
