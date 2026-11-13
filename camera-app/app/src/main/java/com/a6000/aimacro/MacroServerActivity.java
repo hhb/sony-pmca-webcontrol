@@ -176,16 +176,16 @@ public class MacroServerActivity extends BaseActivity
 
         m_camera.setApertureChangeListener(new CameraEx.ApertureChangeListener() {
             @Override
-            public void onChanged(int aperture, CameraEx cameraEx) {
-                m_aperture = aperture;
+            public void onApertureChange(CameraEx.ApertureInfo apertureInfo, CameraEx cameraEx) {
+                m_aperture = apertureInfo.currentAperture;
                 updateStatusText();
             }
         });
 
         m_camera.setShutterSpeedChangeListener(new CameraEx.ShutterSpeedChangeListener() {
             @Override
-            public void onChanged(int num, int den, CameraEx cameraEx) {
-                m_shutterSpeed = formatShutter(num, den);
+            public void onShutterSpeedChange(CameraEx.ShutterSpeedInfo shutterSpeedInfo, CameraEx cameraEx) {
+                m_shutterSpeed = formatShutter(shutterSpeedInfo.currentShutterSpeed_n, shutterSpeedInfo.currentShutterSpeed_d);
                 updateStatusText();
             }
         });

@@ -1,5 +1,7 @@
 package com.a6000.aimacro;
 
+import com.github.ma1co.pmcademo.app.Logger;
+
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.io.Writer;

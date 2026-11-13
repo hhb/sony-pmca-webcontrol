@@ -36,7 +36,7 @@ public class MacroHttpServer extends NanoHTTPD {
         if ("/api/liveview.jpg".equals(uri)) {
             byte[] jpeg = m_activity.getLatestLiveViewJpeg();
             if (jpeg == null) {
-                return addCors(new Response(Response.Status.SERVICE_UNAVAILABLE, MIME_PLAINTEXT, "No preview frame yet"));
+                return addCors(new Response(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "No preview frame yet"));
             }
             Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(jpeg));
             res.addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
