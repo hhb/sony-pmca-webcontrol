@@ -144,8 +144,13 @@ class SonyPmcaClient:
             f.write(data)
         return output_path
 
-    def list_photos(self, limit: int = 50) -> List[Dict[str, Any]]:
-        return self._request_json(f"/api/photos?limit={limit}").get("photos", [])
+    def list_photos(self, dir_path: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+        """List subdirectories and photo files in `dir_path` (non-recursive; defaults to DCIM root)."""
+        params: Dict[str, Any] = {"limit": limit}
+        if dir_path is not None:
+            params["dir"] = dir_path
+        qs = urllib.parse.urlencode(params)
+        return self._request_json(f"/api/photos?{qs}")
 
     def download_photo(self, output_path: str, remote_path: Optional[str] = None) -> str:
         if remote_path:
@@ -211,10 +216,12 @@ class SonyPmcaClient:
         filename = f"photo_{int(time.time())}.jpg"
         if ev:
             data = ev.get("data", {})
+            dir_name = data.get("DirectoryName")
             file_name = data.get("FileName")
             if file_name:
                 filename = file_name
-                for p in self.list_photos(limit=10):
+                listing = self.list_photos(dir_path=dir_name, limit=20)
+                for p in listing.get("photos", []):
                     if p.get("name") == file_name:
                         remote_path = p.get("path")
                         break

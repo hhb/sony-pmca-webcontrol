@@ -175,7 +175,7 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 ### 4. LiveView & Photo Downloads
 
 * **`GET /api/liveview.jpg`**: Latest 640px hardware JPEG frame from `CameraSequence`.
-* **`GET /api/photos?limit=50`**: Lists `.JPG` / `.ARW` files on SD card sorted newest-first.
+* **`GET /api/photos?dir=<relPath>&limit=100`**: Non-recursive directory listing under `DCIM` (sorted newest/name descending). Omit `dir` to list `DCIM` folders (e.g. `100MSDCF`, `101MSDCF`); pass `?dir=100MSDCF` to list photos in that folder. Returns `{ dir, totalPhotosInDir, dirs: [...], photos: [...] }`.
 * **`GET /api/photos/latest`**: Downloads the latest captured JPEG (from in-memory capture buffer or SD card).
 * **`GET /api/photos/download?path=<absolutePath>`**: Streams a specific SD card file (JPG or ARW).
 * **`GET /api/log`**: Returns plain-text crash/debug logs from the camera.

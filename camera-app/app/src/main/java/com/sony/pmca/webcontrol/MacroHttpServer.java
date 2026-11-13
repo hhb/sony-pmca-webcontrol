@@ -118,21 +118,9 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/photos".equals(uri)) {
-                int limit = parseInt(params.get("limit"), 50);
-                List<File> list = m_activity.listPhotosOnSdCard(limit);
-                JSONArray arr = new JSONArray();
-                for (File f : list) {
-                    JSONObject item = new JSONObject();
-                    item.put("name", f.getName());
-                    item.put("path", f.getAbsolutePath().replace("\\", "/"));
-                    item.put("size", f.length());
-                    item.put("modified", f.lastModified());
-                    arr.put(item);
-                }
-                JSONObject root = new JSONObject();
-                root.put("ok", true);
-                root.put("count", arr.length());
-                root.put("photos", arr);
+                int limit = parseInt(params.get("limit"), 100);
+                String dir = params.get("dir");
+                JSONObject root = m_activity.listPhotoDirectory(dir, limit);
                 return jsonOk(root.toString());
             }
 
