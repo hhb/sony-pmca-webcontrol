@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sony PMCA WebControl</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #111; color: #eee; margin: 0; padding: 12px; }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  h2 { margin: 0; font-size: 16px; color: #8be9fd; }
+  .pill { font-size: 12px; padding: 3px 8px; border-radius: 99px; background: #222; border: 1px solid #444; }
+  .live { width: 100%; background: #000; border: 1px solid #333; border-radius: 6px; overflow: hidden; text-align: center; }
+  .live img { width: 100%; max-height: 440px; object-fit: contain; display: block; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; background: #1b1b1b; padding: 8px 12px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+  .stats b { color: #50fa7b; }
+  .card { background: #1a1a1a; border: 1px solid #2c2c2c; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .row:last-child { margin-bottom: 0; }
+  .lbl { font-size: 12px; color: #aaa; min-width: 64px; }
+  button, a.btn, select { background: #2a2a2a; color: #fff; border: 1px solid #444; padding: 7px 11px; border-radius: 4px; cursor: pointer; font-size: 13px; text-decoration: none; }
+  button:hover, a.btn:hover { background: #383838; }
+  button:active { background: #484848; }
+  button.pri { background: #0b6efd; border-color: #0b6efd; }
+  a.succ { background: #198754; border-color: #198754; }
+  .msg { font-size: 12px; color: #f1fa8c; min-height: 16px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h2>Sony PMCA WebControl</h2>
+    <span class="pill" id="connState">connecting...</span>
+  </div>
+
+  <div class="live"><img id="lv" alt="LiveView"></div>
+
+  <div class="stats">
+    <span>Aperture: <b id="sAp">--</b></span>
+    <span>Shutter: <b id="sSs">--</b></span>
+    <span>ISO: <b id="sIso">--</b></span>
+    <span>MF: <b id="sFocus">--</b></span>
+    <span>Zoom: <b id="sZoom">--</b></span>
+    <span id="sLens" style="color:#888"></span>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="lbl">Focus</span>
+      <button onclick="stepFocus(-12)">&lt;&lt;&lt;</button>
+      <button onclick="stepFocus(-4)">&lt;&lt;</button>
+      <button onclick="stepFocus(-1)">&lt;</button>
+      <button onclick="stepFocus(1)">&gt;</button>
+      <button onclick="stepFocus(4)">&gt;&gt;</button>
+      <button onclick="stepFocus(12)">&gt;&gt;&gt;</button>
+    </div>
+    <div class="row">
+      <span class="lbl">Exposure</span>
+      <button onclick="cam('decrementAperture')">F -</button>
+      <button onclick="cam('incrementAperture')">F +</button>
+      <button onclick="cam('decrementShutterSpeed')">SS -</button>
+      <button onclick="cam('incrementShutterSpeed')">SS +</button>
+      <select id="isoSel" onchange="setIso(this.value)">
+        <option value="">ISO...</option>
+      </select>
+    </div>
+    <div class="row">
+      <span class="lbl">Zoom / MF</span>
+      <button onmousedown="cam('startZoom?dir=1&speed=2')" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom?dir=1&speed=2')" ontouchend="cam('stopZoom')">Zoom Out</button>
+      <button onmousedown="cam('startZoom?dir=0&speed=2')" onmouseup="cam('stopZoom')" ontouchstart="cam('startZoom?dir=0&speed=2')" ontouchend="cam('stopZoom')">Zoom In</button>
+      <button onclick="cam('resetDigitalZoom')">1.0x</button>
+      <button onclick="cam('setDigitalZoom?v=140')">1.4x</button>
+      <button onclick="cam('setDigitalZoom?v=200')">2.0x</button>
+      <button onclick="cam('setDigitalZoom?v=400')">4.0x</button>
+      <button id="mfBtn" onclick="toggleMfAssist()">MF Assist</button>
+    </div>
+    <div class="row">
+      <span class="lbl">Capture</span>
+      <button class="pri" onclick="cam('burstableTakePicture')">Take Photo</button>
+      <a class="btn succ" href="/api/photos/latest" download="photo_latest.jpg">&#11015; Download Last Photo</a>
+      <button onclick="cam('executeAutoFocusStartTrigger?halfPress=true')">AF Trigger</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+</div>
+
+<script>
+const st = {
+  seq: 0,
+  curFocus: 0,
+  maxFocus: 0,
+  mfAssistOn: false,
+  focusBusy: false
+};
+
+function setMsg(t) {
+  document.getElementById('msg').textContent = t || '';
+}
+
+async function apiJson(url, opts) {
+  const r = await fetch(url, opts);
+  const data = await r.json();
+  if (!data.ok) {
+    setMsg('Error: ' + (data.error || r.status));
+  }
+  return data;
+}
+
+function cam(actionAndQuery) {
+  setMsg('');
+  return apiJson('/api/camera/' + actionAndQuery, { method: 'POST' });
+}
+
+function formatShutter(n, d) {
+  if (!d) return '--';
+  if (d === 1) return n + 's';
+  return n + '/' + d;
+}
+
+function applyState(s) {
+  if (s.seq) st.seq = s.seq;
+  if (s.aperture && s.aperture.currentAperture) {
+    document.getElementById('sAp').textContent = 'F' + (s.aperture.currentAperture / 100).toFixed(1);
+  }
+  if (s.shutter && s.shutter.currentShutterSpeed_d) {
+    document.getElementById('sSs').textContent = formatShutter(s.shutter.currentShutterSpeed_n, s.shutter.currentShutterSpeed_d);
+  }
+  if (s.focus && s.focus.maxPosition !== undefined) {
+    st.curFocus = s.focus.currentPosition || 0;
+    st.maxFocus = s.focus.maxPosition || 0;
+    document.getElementById('sFocus').textContent = st.curFocus + '/' + st.maxFocus;
+  }
+  if (s.zoom) {
+    const dz = s.zoom.digitalMagnification || 100;
+    const oz = s.zoom.opticalMagnification || 100;
+    document.getElementById('sZoom').textContent = (oz / 100).toFixed(1) + 'x / DZ ' + (dz / 100).toFixed(1) + 'x';
+  }
+  if (s.autoIso) {
+    document.getElementById('sIso').textContent = 'AUTO(' + s.autoIso + ')';
+  }
+  if (s.previewMagnification) {
+    st.mfAssistOn = !!s.previewMagnification.enabled;
+  }
+  if (s.lens && s.lens.LensName) {
+    document.getElementById('sLens').textContent = s.lens.LensName;
+  }
+}
+
+async function loadIsoOptions() {
+  try {
+    const sup = await apiJson('/api/modifier/getSupportedISOSensitivities');
+    const cur = await apiJson('/api/modifier/getISOSensitivity');
+    const sel = document.getElementById('isoSel');
+    sel.innerHTML = '';
+    const list = sup.result || [];
+    for (const v of list) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v === 0 ? 'ISO AUTO' : 'ISO ' + v;
+      sel.appendChild(opt);
+    }
+    if (cur.result !== undefined) {
+      sel.value = String(cur.result);
+      document.getElementById('sIso').textContent = cur.result === 0 ? 'AUTO' : String(cur.result);
+    }
+  } catch (e) {}
+}
+
+async function setIso(v) {
+  if (v === '') return;
+  await apiJson('/api/modifier/setISOSensitivity?v=' + encodeURIComponent(v), { method: 'POST' });
+  document.getElementById('sIso').textContent = v === '0' ? 'AUTO' : v;
+}
+
+function toggleMfAssist() {
+  if (st.mfAssistOn) {
+    cam('stopPreviewMagnification');
+  } else {
+    cam('setPreviewMagnification?ratio=590&x=0&y=0');
+  }
+}
+
+// Focus stepping: tries shiftFocusPosition first; falls back to startOneShotFocusDrive closed-loop
+async function stepFocus(delta) {
+  if (st.focusBusy) return;
+  st.focusBusy = true;
+  try {
+    const startPos = st.curFocus;
+    const target = Math.max(0, st.maxFocus > 0 ? Math.min(st.maxFocus, startPos + delta) : startPos + delta);
+    const res = await cam('shiftFocusPosition?n=' + delta);
+    if (res && res.result === true) {
+      st.focusBusy = false;
+      return;
+    }
+    // Fallback closed-loop drive using startOneShotFocusDrive
+    let retries = 0;
+    while (st.curFocus !== target && retries < 10) {
+      const diff = target - st.curFocus;
+      const dir = diff > 0 ? 1 : 0; // 1 = FAR, 0 = NEAR (CameraEx constants: check)
+      const absD = Math.abs(diff);
+      const speed = absD > 20 ? 4 : absD > 10 ? 3 : absD > 4 ? 2 : 1;
+      const prev = st.curFocus;
+      await cam('startOneShotFocusDrive?dir=' + dir + '&speed=' + speed);
+      await new Promise(r => setTimeout(r, 90));
+      if (st.curFocus === prev) retries++; else retries = 0;
+    }
+  } finally {
+    st.focusBusy = false;
+  }
+}
+
+async function eventLoop() {
+  while (true) {
+    try {
+      const res = await fetch('/api/events?since=' + st.seq + '&timeout=10');
+      const data = await res.json();
+      document.getElementById('connState').textContent = 'online';
+      if (data.seq) st.seq = data.seq;
+      for (const ev of (data.events || [])) {
+        if (ev.type === 'ApertureChange') {
+          applyState({ aperture: ev.data });
+        } else if (ev.type === 'ShutterSpeedChange') {
+          applyState({ shutter: ev.data });
+        } else if (ev.type === 'FocusDrive') {
+          applyState({ focus: ev.data });
+        } else if (ev.type === 'ZoomChange') {
+          applyState({ zoom: ev.data });
+        } else if (ev.type === 'AutoISOSensitivity') {
+          applyState({ autoIso: ev.data.iso });
+        } else if (ev.type === 'PreviewMagnification') {
+          st.mfAssistOn = !!ev.data.enabled;
+        } else if (ev.type === 'StoreImageComplete') {
+          setMsg('Saved: ' + (ev.data.FileName || 'photo'));
+        } else if (ev.type === 'SettingChanged') {
+          loadIsoOptions();
+        }
+      }
+    } catch (e) {
+      document.getElementById('connState').textContent = 'reconnecting...';
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+function startLiveView() {
+  const img = document.getElementById('lv');
+  function nextFrame() {
+    img.src = '/api/liveview.jpg?t=' + Date.now();
+  }
+  img.onload = () => setTimeout(nextFrame, 50);
+  img.onerror = () => setTimeout(nextFrame, 500);
+  nextFrame();
+}
+
+(async function init() {
+  startLiveView();
+  try {
+    const s = await apiJson('/api/state');
+    applyState(s);
+    document.getElementById('connState').textContent = 'online';
+  } catch (e) {}
+  await loadIsoOptions();
+  eventLoop();
+})();
+</script>
+</body>
+</html>

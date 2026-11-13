@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
 import android.text.format.Formatter;
 import android.util.Pair;
 import android.view.SurfaceHolder;
@@ -25,6 +26,9 @@ import com.sony.scalar.hardware.DeviceBuffer;
 import com.sony.scalar.hardware.DeviceMemory;
 import com.sony.scalar.sysutil.ScalarProperties;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -32,18 +36,19 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
-public class MacroServerActivity extends BaseActivity
-        implements SurfaceHolder.Callback, CameraEx.ShutterListener {
-
-    public enum State {
-        idle, focusing, capturing, bracketing, error
-    }
+public class MacroServerActivity extends BaseActivity implements SurfaceHolder.Callback {
 
     private static final int LIVEVIEW_BUF_CAPACITY = 128 * 1024;
+    public static final long MAIN_THREAD_TIMEOUT_MS = 3000L;
 
     private SurfaceHolder m_surfaceHolder;
     private CameraEx m_camera;
@@ -51,7 +56,9 @@ public class MacroServerActivity extends BaseActivity
     private CameraEx.AutoPictureReviewControl m_autoReviewControl;
     private int m_pictureReviewTime;
 
-    private final Handler m_handler = new Handler();
+    private final Handler m_handler = new Handler(Looper.getMainLooper());
+    private final CameraEventHub m_eventHub = new CameraEventHub();
+    private final ModifierProxy m_modifierProxy = new ModifierProxy();
 
     private FocusScaleView m_focusScaleView;
     private TextView m_tvCameraStatus;
@@ -63,22 +70,15 @@ public class MacroServerActivity extends BaseActivity
     private int m_httpPort = MacroHttpServer.DEFAULT_PORT;
     private String m_wifiIp = "0.0.0.0";
 
-    private volatile State m_state = State.idle;
+    // Cached display values for on-camera LCD
     private volatile int m_curFocus = 0;
     private volatile int m_maxFocus = 0;
     private volatile int m_aperture = 0;
     private volatile String m_shutterSpeed = "--";
     private volatile int m_iso = 0;
-    private volatile int m_digitalZoom = 100;
     private volatile int m_opticalZoom = 100;
+    private volatile int m_digitalZoom = 100;
     private volatile int m_previewMag = 0;
-    private volatile List<Integer> m_supportedIsos;
-
-    // Focus drive / goto / bracketing state
-    private int m_focusBeforeDrive = 0;
-    private int m_targetFocus = 0;
-    private int m_stuckCount = 0;
-    private LinkedList<Integer> m_focusQueue = new LinkedList<Integer>();
 
     // Hardware LiveView / JPEG buffer (via Sony CameraSequence)
     private final Object m_frameLock = new Object();
@@ -87,54 +87,23 @@ public class MacroServerActivity extends BaseActivity
     private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
 
-    private final Runnable m_stopZoomRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (m_camera != null) {
-                try {
-                    m_camera.stopZoom();
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-    };
+    public CameraEventHub getEventHub() {
+        return m_eventHub;
+    }
 
-    private final Runnable m_checkFocusRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if ((m_state == State.focusing || m_state == State.bracketing) && m_focusBeforeDrive == m_curFocus) {
-                m_stuckCount++;
-                if (m_stuckCount == 2 && m_camera != null) {
-                    try {
-                        Camera.Parameters focusParams = m_camera.createEmptyParameters();
-                        focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
-                        m_camera.getNormalCamera().setParameters(focusParams);
-                    } catch (Throwable ignored) {
-                    }
-                }
-                if (m_stuckCount > 12) {
-                    Logger.info("Focus drive stalled at " + m_curFocus + " (target " + m_targetFocus + ")");
-                    if (m_state == State.focusing) {
-                        m_state = State.idle;
-                        updateStatusText();
-                    } else if (m_state == State.bracketing) {
-                        takePictureInternal();
-                    }
-                } else {
-                    driveTowardTarget();
-                }
-            }
-        }
-    };
+    public ModifierProxy getModifierProxy() {
+        return m_modifierProxy;
+    }
+
+    public CameraEx getCameraEx() {
+        return m_camera;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Thread.setDefaultUncaughtExceptionHandler(new CustomExceptionHandler());
         setContentView(R.layout.activity_macro_server);
-
-        if (!(Thread.getDefaultUncaughtExceptionHandler() instanceof CustomExceptionHandler)) {
-            Thread.setDefaultUncaughtExceptionHandler(new CustomExceptionHandler());
-        }
 
         SurfaceView surfaceView = (SurfaceView) findViewById(R.id.surfaceView);
         m_surfaceHolder = surfaceView.getHolder();
@@ -148,14 +117,7 @@ public class MacroServerActivity extends BaseActivity
         m_networkStateReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                try {
-                    NetworkInfo info = intent.getParcelableExtra(WifiManager.EXTRA_NETWORK_INFO);
-                    if (info != null) {
-                        handleNetworkState(info.getDetailedState());
-                    }
-                } catch (Throwable t) {
-                    Logger.error("Network receiver error: " + t.toString());
-                }
+                updateWifiStatus();
             }
         };
     }
@@ -163,10 +125,10 @@ public class MacroServerActivity extends BaseActivity
     @Override
     protected void onResume() {
         super.onResume();
+        setAutoPowerOffMode(false);
 
+        registerReceiver(m_networkStateReceiver, new IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION));
         try {
-            setAutoPowerOffMode(false);
-            registerReceiver(m_networkStateReceiver, new IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION));
             m_wifiManager.setWifiEnabled(true);
         } catch (Throwable t) {
             Logger.error("Wi-Fi init error: " + t.toString());
@@ -179,96 +141,345 @@ public class MacroServerActivity extends BaseActivity
             m_surfaceHolder.addCallback(this);
             m_autoReviewControl = new CameraEx.AutoPictureReviewControl();
             m_camera.setAutoPictureReviewControl(m_autoReviewControl);
-            m_camera.setShutterListener(this);
 
-            m_camera.setJpegListener(new CameraEx.JpegListener() {
-                @Override
-                public void onPictureTaken(byte[] data, CameraEx cameraEx) {
-                    if (data != null) {
-                        synchronized (m_frameLock) {
-                            m_latestJpeg = data;
-                            m_lastCapturedJpeg = data;
-                        }
-                    }
-                }
-            });
-
-            m_camera.setFocusDriveListener(new CameraEx.FocusDriveListener() {
-                @Override
-                public void onChanged(CameraEx.FocusPosition focusPosition, CameraEx cameraEx) {
-                    m_handler.removeCallbacks(m_checkFocusRunnable);
-                    m_stuckCount = 0;
-                    m_maxFocus = focusPosition.maxPosition;
-                    m_curFocus = focusPosition.currentPosition;
-                    m_focusScaleView.setMaxPosition(m_maxFocus);
-                    m_focusScaleView.setCurPosition(m_curFocus);
-
-                    if (m_state == State.focusing) {
-                        if (m_maxFocus > 0) {
-                            m_targetFocus = Math.max(0, Math.min(m_maxFocus, m_targetFocus));
-                        }
-                        if (m_curFocus == m_targetFocus) {
-                            m_state = State.idle;
-                        } else {
-                            driveTowardTarget();
-                        }
-                    } else if (m_state == State.bracketing && !m_focusQueue.isEmpty()) {
-                        if (m_curFocus == m_focusQueue.getFirst()) {
-                            takePictureInternal();
-                        } else {
-                            driveTowardTarget();
-                        }
-                    }
-                    updateStatusText();
-                }
-            });
-
-            m_camera.setApertureChangeListener(new CameraEx.ApertureChangeListener() {
-                @Override
-                public void onApertureChange(CameraEx.ApertureInfo apertureInfo, CameraEx cameraEx) {
-                    if (apertureInfo != null) {
-                        m_aperture = apertureInfo.currentAperture;
-                        updateStatusText();
-                    }
-                }
-            });
-
-            m_camera.setShutterSpeedChangeListener(new CameraEx.ShutterSpeedChangeListener() {
-                @Override
-                public void onShutterSpeedChange(CameraEx.ShutterSpeedInfo shutterSpeedInfo, CameraEx cameraEx) {
-                    if (shutterSpeedInfo != null) {
-                        m_shutterSpeed = formatShutter(
-                                shutterSpeedInfo.currentShutterSpeed_n,
-                                shutterSpeedInfo.currentShutterSpeed_d);
-                        updateStatusText();
-                    }
-                }
-            });
-
-            try {
-                m_camera.setZoomChangeListener(new CameraEx.ZoomChangeListener() {
-                    @Override
-                    public void onChanged(CameraEx.ZoomInfo zoomInfo, CameraEx cameraEx) {
-                        if (zoomInfo != null) {
-                            if (zoomInfo.opticalMagnification > 0) {
-                                m_opticalZoom = zoomInfo.opticalMagnification;
-                            }
-                            if (zoomInfo.digitalMagnification > 0) {
-                                m_digitalZoom = zoomInfo.digitalMagnification;
-                            }
-                            updateStatusText();
-                        }
-                    }
-                });
-            } catch (Throwable ignored) {
-            }
-
+            registerCameraListeners();
             initCameraDefaults();
-            refreshExposureCache();
+            refreshInitialState();
             updateStatusText();
         } catch (Throwable t) {
             Logger.error("onResume camera init error: " + t.toString());
             m_tvCameraStatus.setText("Init error: " + t.getMessage());
+        }
+    }
+
+    private void registerCameraListeners() {
+        m_camera.setShutterListener(new CameraEx.ShutterListener() {
+            @Override
+            public void onShutter(int status, CameraEx cameraEx) {
+                try {
+                    m_camera.cancelTakePicture();
+                } catch (Throwable ignored) {
+                }
+                m_eventHub.setLastShutterStatus(status);
+                JSONObject data = new JSONObject();
+                try {
+                    data.put("status", status);
+                } catch (Throwable ignored) {
+                }
+                m_eventHub.emit("Shutter", data);
+                updateStatusText();
+            }
+        });
+
+        try {
+            m_camera.setCaptureStatusListener(new CameraEx.OnCaptureStatusListener() {
+                @Override
+                public void onStart(int reason, CameraEx cameraEx) {
+                    m_eventHub.setCapturing(true);
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("capturing", true);
+                        data.put("reason", reason);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("CaptureStart", data);
+                }
+
+                @Override
+                public void onEnd(int reason, int arg1, CameraEx cameraEx) {
+                    m_eventHub.setCapturing(false);
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("capturing", false);
+                        data.put("reason", reason);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("CaptureEnd", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        m_camera.setJpegListener(new CameraEx.JpegListener() {
+            @Override
+            public void onPictureTaken(byte[] data, CameraEx cameraEx) {
+                if (data != null) {
+                    synchronized (m_frameLock) {
+                        m_latestJpeg = data;
+                        m_lastCapturedJpeg = data;
+                    }
+                    JSONObject ev = new JSONObject();
+                    try {
+                        ev.put("size", data.length);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("Jpeg", ev);
+                }
+            }
+        });
+
+        try {
+            m_camera.setStoreImageCompleteListener(new CameraEx.StoreImageCompleteListener() {
+                @Override
+                public void onDone(int status, CameraEx.StoreImageInfo info, CameraEx cameraEx) {
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("status", status);
+                        if (info != null) {
+                            data.put("DirectoryName", info.DirectoryName);
+                            data.put("FileName", info.FileName);
+                            data.put("DirectoryNo", info.DirectoryNo);
+                            data.put("FileNo", info.FileNo);
+                            data.put("MediaId", info.MediaId);
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.updateLastStoreImage(data);
+                    m_eventHub.emit("StoreImageComplete", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        m_camera.setFocusDriveListener(new CameraEx.FocusDriveListener() {
+            @Override
+            public void onChanged(CameraEx.FocusPosition focusPosition, CameraEx cameraEx) {
+                if (focusPosition == null) return;
+                m_maxFocus = focusPosition.maxPosition;
+                m_curFocus = focusPosition.currentPosition;
+                m_focusScaleView.setMaxPosition(m_maxFocus);
+                m_focusScaleView.setCurPosition(m_curFocus);
+
+                JSONObject data = new JSONObject();
+                try {
+                    data.put("currentPosition", m_curFocus);
+                    data.put("maxPosition", m_maxFocus);
+                } catch (Throwable ignored) {
+                }
+                m_eventHub.updateFocus(data);
+                m_eventHub.emit("FocusDrive", data);
+                updateStatusText();
+            }
+        });
+
+        try {
+            m_camera.setAutoFocusStartListener(new CameraEx.AutoFocusStartListener() {
+                @Override
+                public void onStart(CameraEx cameraEx) {
+                    m_eventHub.emit("AutoFocusStart", new JSONObject());
+                }
+            });
+            m_camera.setAutoFocusDoneListener(new CameraEx.AutoFocusDoneListener() {
+                @Override
+                public void onDone(int status, int[] focusAreaIds, CameraEx cameraEx) {
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("status", status);
+                        data.put("focusAreaIds", ModifierProxy.toJsonValue(focusAreaIds));
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("AutoFocusDone", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        m_camera.setApertureChangeListener(new CameraEx.ApertureChangeListener() {
+            @Override
+            public void onApertureChange(CameraEx.ApertureInfo info, CameraEx cameraEx) {
+                if (info == null) return;
+                m_aperture = info.currentAperture;
+                JSONObject data = new JSONObject();
+                try {
+                    data.put("currentAperture", info.currentAperture);
+                    data.put("currentAvailableMin", info.currentAvailableMin);
+                    data.put("currentAvailableMax", info.currentAvailableMax);
+                } catch (Throwable ignored) {
+                }
+                m_eventHub.updateAperture(data);
+                m_eventHub.emit("ApertureChange", data);
+                updateStatusText();
+            }
+        });
+
+        m_camera.setShutterSpeedChangeListener(new CameraEx.ShutterSpeedChangeListener() {
+            @Override
+            public void onShutterSpeedChange(CameraEx.ShutterSpeedInfo info, CameraEx cameraEx) {
+                if (info == null) return;
+                m_shutterSpeed = formatShutter(info.currentShutterSpeed_n, info.currentShutterSpeed_d);
+                JSONObject data = new JSONObject();
+                try {
+                    data.put("currentShutterSpeed_n", info.currentShutterSpeed_n);
+                    data.put("currentShutterSpeed_d", info.currentShutterSpeed_d);
+                    data.put("currentAvailableMin_n", info.currentAvailableMin_n);
+                    data.put("currentAvailableMin_d", info.currentAvailableMin_d);
+                    data.put("currentAvailableMax_n", info.currentAvailableMax_n);
+                    data.put("currentAvailableMax_d", info.currentAvailableMax_d);
+                } catch (Throwable ignored) {
+                }
+                m_eventHub.updateShutter(data);
+                m_eventHub.emit("ShutterSpeedChange", data);
+                updateStatusText();
+            }
+        });
+
+        try {
+            m_camera.setAutoISOSensitivityListener(new CameraEx.AutoISOSensitivityListener() {
+                @Override
+                public void onChanged(int iso, CameraEx cameraEx) {
+                    m_eventHub.setAutoIso(iso);
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("iso", iso);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("AutoISOSensitivity", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setZoomChangeListener(new CameraEx.ZoomChangeListener() {
+                @Override
+                public void onChanged(CameraEx.ZoomInfo info, CameraEx cameraEx) {
+                    if (info == null) return;
+                    if (info.opticalMagnification > 0) m_opticalZoom = info.opticalMagnification;
+                    if (info.digitalMagnification > 0) m_digitalZoom = info.digitalMagnification;
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("opticalPosition", info.opticalPosition);
+                        data.put("opticalMagnification", info.opticalMagnification);
+                        data.put("digitalPosition", info.digitalPosition);
+                        data.put("digitalMagnification", info.digitalMagnification);
+                        data.put("digitalZoomType", info.digitalZoomType);
+                        data.put("stopped", info.stopped);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.updateZoom(data);
+                    m_eventHub.emit("ZoomChange", data);
+                    updateStatusText();
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setFocalLengthChangeListener(new CameraEx.FocalLengthChangeListener() {
+                @Override
+                public void onFocalLengthChanged(int fl, CameraEx cameraEx) {
+                    m_eventHub.setFocalLength(fl);
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("focalLength", fl);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("FocalLengthChange", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setPowerZoomListener(new CameraEx.PowerZoomListener() {
+                @Override
+                public void onChanged(int status, CameraEx cameraEx) {
+                    m_eventHub.setPowerZoom(status);
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("status", status);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("PowerZoom", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setPreviewMagnificationListener(new CameraEx.PreviewMagnificationListener() {
+                @Override
+                public void onChanged(boolean enabled, int ratio, int arg2, Pair pos, CameraEx cameraEx) {
+                    m_previewMag = enabled ? ratio : 0;
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("enabled", enabled);
+                        data.put("ratio", ratio);
+                        data.put("pos", ModifierProxy.toJsonValue(pos));
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.updatePreviewMag(data);
+                    m_eventHub.emit("PreviewMagnification", data);
+                }
+
+                @Override
+                public void onInfoUpdated(boolean enabled, Pair pos, CameraEx cameraEx) {
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("enabled", enabled);
+                        data.put("pos", ModifierProxy.toJsonValue(pos));
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("PreviewMagnificationInfo", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setSettingChangedListener(new CameraEx.SettingChangedListener() {
+                @Override
+                public void onChanged(int[] types, Camera.Parameters params, CameraEx cameraEx) {
+                    try {
+                        if (params != null) {
+                            m_iso = m_camera.createParametersModifier(params).getISOSensitivity();
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("types", ModifierProxy.toJsonValue(types));
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("SettingChanged", data);
+                    updateStatusText();
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setEquipmentCallback(new CameraEx.EquipmentCallback() {
+                @Override
+                public void onEquipmentChange(int deviceType, int status, CameraEx cameraEx) {
+                    if (deviceType == CameraEx.EquipmentCallback.DEVICE_TYPE_LENS) {
+                        m_eventHub.setLensInfo(buildLensInfoJson());
+                    }
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("deviceType", deviceType);
+                        data.put("status", status);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("EquipmentChange", data);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            m_camera.setErrorCallback(new CameraEx.ErrorCallback() {
+                @Override
+                public void onError(int error, CameraEx cameraEx) {
+                    JSONObject data = new JSONObject();
+                    try {
+                        data.put("error", error);
+                    } catch (Throwable ignored) {
+                    }
+                    m_eventHub.emit("Error", data);
+                }
+            });
+        } catch (Throwable ignored) {
         }
     }
 
@@ -280,6 +491,7 @@ public class MacroServerActivity extends BaseActivity
                 srv.start();
                 m_httpServer = srv;
                 m_httpPort = port;
+                m_eventHub.setWifiInfo(m_wifiIp, m_httpPort);
                 Logger.info("HTTP server listening on port " + port);
                 return;
             } catch (Throwable t) {
@@ -292,10 +504,6 @@ public class MacroServerActivity extends BaseActivity
     @Override
     protected void onPause() {
         super.onPause();
-
-        abortBracket();
-        m_handler.removeCallbacks(m_checkFocusRunnable);
-        m_handler.removeCallbacks(m_stopZoomRunnable);
 
         if (m_httpServer != null) {
             try {
@@ -347,162 +555,245 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
-    @SuppressWarnings("unchecked")
     private void initCameraDefaults() {
         try {
+            m_pictureReviewTime = m_autoReviewControl.getPictureReviewTime();
+            m_autoReviewControl.setPictureReviewTime(0);
+
             Camera.Parameters params = m_camera.createEmptyParameters();
             CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
             modifier.setDriveMode(CameraEx.ParametersModifier.DRIVE_MODE_SINGLE);
             params.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
-            modifier.setSelfTimer(0);
             m_camera.getNormalCamera().setParameters(params);
-        } catch (Throwable t) {
-            Logger.error("setDefaults MF/drive warning: " + t.toString());
-            try {
-                Camera.Parameters focusParams = m_camera.createEmptyParameters();
-                focusParams.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
-                m_camera.getNormalCamera().setParameters(focusParams);
-            } catch (Throwable ignored) {
-            }
-        }
 
-        try {
-            Camera.Parameters currentParams = m_camera.getNormalCamera().getParameters();
-            CameraEx.ParametersModifier curMod = m_camera.createParametersModifier(currentParams);
-            List<String> dzTypes = (List<String>) curMod.getSupportedDigitalZoomTypes();
-            if (dzTypes != null && !dzTypes.isEmpty()) {
+            // Enable Precision Digital Zoom so setDigitalZoom works out of the box
+            try {
                 Camera.Parameters dzParams = m_camera.createEmptyParameters();
                 CameraEx.ParametersModifier dzMod = m_camera.createParametersModifier(dzParams);
-                for (String zt : dzTypes) {
-                    dzMod.setDigitalZoomMode(zt, true);
-                }
+                dzMod.setDigitalZoomMode(CameraEx.ParametersModifier.DIGITAL_ZOOM_TYPE_PRECISION, true);
                 m_camera.getNormalCamera().setParameters(dzParams);
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable t) {
+            Logger.error("initCameraDefaults error: " + t.toString());
+        }
+    }
+
+    private void refreshInitialState() {
+        m_eventHub.setLensInfo(buildLensInfoJson());
+        try {
+            Camera.Parameters params = m_camera.getNormalCamera().getParameters();
+            CameraEx.ParametersModifier mod = m_camera.createParametersModifier(params);
+            try {
+                m_aperture = mod.getAperture();
+                if (m_aperture > 0) {
+                    JSONObject ap = new JSONObject();
+                    ap.put("currentAperture", m_aperture);
+                    m_eventHub.updateAperture(ap);
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                Pair ss = mod.getShutterSpeed();
+                if (ss != null && ss.first != null && ss.second != null) {
+                    int n = (Integer) ss.first;
+                    int d = (Integer) ss.second;
+                    m_shutterSpeed = formatShutter(n, d);
+                    JSONObject ssObj = new JSONObject();
+                    ssObj.put("currentShutterSpeed_n", n);
+                    ssObj.put("currentShutterSpeed_d", d);
+                    m_eventHub.updateShutter(ssObj);
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                m_iso = mod.getISOSensitivity();
+            } catch (Throwable ignored) {
             }
         } catch (Throwable ignored) {
         }
-
-        try {
-            String platformVersion = ScalarProperties.getString(ScalarProperties.PROP_VERSION_PLATFORM);
-            if (platformVersion != null) {
-                String[] split = platformVersion.split("\\Q.\\E");
-                if (split.length >= 2 && Integer.parseInt(split[1]) < 3) {
-                    m_state = State.error;
-                }
-            }
-        } catch (Throwable t) {
-            Logger.error("Platform check warning: " + t.toString());
-        }
-
-        try {
-            m_pictureReviewTime = m_autoReviewControl.getPictureReviewTime();
-            m_autoReviewControl.setPictureReviewTime(0);
-        } catch (Throwable t) {
-            Logger.error("AutoReview init warning: " + t.toString());
-        }
     }
 
-    @SuppressWarnings("unchecked")
-    private void refreshExposureCache() {
-        if (m_camera == null) {
-            return;
-        }
-        try {
-            Camera.Parameters params = m_camera.getNormalCamera().getParameters();
-            CameraEx.ParametersModifier modifier = m_camera.createParametersModifier(params);
-            m_aperture = modifier.getAperture();
-            Pair<Integer, Integer> ss = modifier.getShutterSpeed();
-            if (ss != null) {
-                m_shutterSpeed = formatShutter(ss.first, ss.second);
-            }
-            m_iso = modifier.getISOSensitivity();
-            m_supportedIsos = (List<Integer>) modifier.getSupportedISOSensitivities();
-        } catch (Throwable t) {
-            Logger.error("refreshExposureCache warning: " + t.toString());
-        }
+    private String formatShutter(int n, int d) {
+        if (d <= 0) return "--";
+        if (d == 1) return n + "s";
+        if (n == 1) return "1/" + d;
+        return n + "/" + d;
     }
 
-    private void handleNetworkState(NetworkInfo.DetailedState state) {
-        WifiInfo info = m_wifiManager.getConnectionInfo();
-        String ssid = info != null ? info.getSSID() : "";
-        switch (state) {
-            case CONNECTING:
-                m_tvWifiStatus.setText("Wi-Fi: Connecting to " + ssid + "...");
-                break;
-            case OBTAINING_IPADDR:
-                m_tvWifiStatus.setText("Wi-Fi: Obtaining IP...");
-                break;
-            case CONNECTED:
-                m_wifiIp = info != null ? Formatter.formatIpAddress(info.getIpAddress()) : "0.0.0.0";
-                String portSuffix = (m_httpPort == 80) ? "" : (":" + m_httpPort);
-                m_tvWifiStatus.setText("READY (" + ssid + "): http://" + m_wifiIp + portSuffix);
-                break;
-            case DISCONNECTED:
-                m_wifiIp = "0.0.0.0";
-                m_tvWifiStatus.setText("Wi-Fi: Disconnected (Check camera Wi-Fi settings)");
-                break;
-            case FAILED:
-                m_tvWifiStatus.setText("Wi-Fi: Connection failed");
-                break;
-            default:
-                break;
+    private void updateWifiStatus() {
+        try {
+            WifiInfo info = m_wifiManager.getConnectionInfo();
+            int ipInt = info.getIpAddress();
+            m_wifiIp = (ipInt != 0) ? Formatter.formatIpAddress(ipInt) : "0.0.0.0";
+            m_eventHub.setWifiInfo(m_wifiIp, m_httpPort);
+
+            String ssid = info.getSSID() != null ? info.getSSID() : "";
+            String portSuffix = (m_httpPort == 80) ? "" : (":" + m_httpPort);
+            NetworkInfo.DetailedState state = WifiInfo.getDetailedStateOf(info.getSupplicantState());
+            if (ipInt != 0) {
+                m_tvWifiStatus.setText("Wi-Fi: " + ssid + " -> http://" + m_wifiIp + portSuffix);
+            } else {
+                m_tvWifiStatus.setText("Wi-Fi: " + state.name() + " (" + ssid + ")");
+            }
+        } catch (Throwable t) {
+            m_tvWifiStatus.setText("Wi-Fi: error");
         }
     }
 
     private void updateStatusText() {
-        String fStr = m_aperture > 0 ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--";
-        String isoStr = m_iso == 0 ? "AUTO" : String.valueOf(m_iso);
-        StringBuilder sb = new StringBuilder();
-        sb.append(fStr)
-          .append(" | ").append(m_shutterSpeed)
-          .append(" | ISO ").append(isoStr)
-          .append(" | MF ").append(m_curFocus).append("/").append(m_maxFocus);
-        if (m_digitalZoom > 100 || m_opticalZoom > 100) {
-            float totalZoom = (m_opticalZoom / 100.0f) * (m_digitalZoom / 100.0f);
-            sb.append(String.format(Locale.US, " | %.1fx", totalZoom));
-        }
-        if (m_state == State.bracketing) {
-            sb.append(" [").append(m_focusQueue.size()).append("]");
-        } else if (m_state != State.idle) {
-            sb.append(" [").append(m_state.name()).append("]");
-        }
-        m_tvCameraStatus.setText(sb.toString());
+        final String apStr = (m_aperture > 0) ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--";
+        final String isoStr = (m_iso == 0) ? "AUTO" : String.valueOf(m_iso);
+        final String zoomStr = (m_digitalZoom > 100) ? String.format(Locale.US, "  DZ:%.1fx", m_digitalZoom / 100.0f) : "";
+        final String text = apStr + "  " + m_shutterSpeed + "  ISO:" + isoStr + zoomStr + "  MF:" + m_curFocus + "/" + m_maxFocus;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                m_tvCameraStatus.setText(text);
+            }
+        });
     }
 
-    private static String formatShutter(int n, int d) {
-        if (n == 1 && d != 2 && d != 1) {
-            return n + "/" + d;
-        } else if (d == 1) {
-            return n == 65535 ? "BULB" : (n + "\"");
-        } else {
-            return String.format(Locale.US, "%.1f\"", (float) n / (float) d);
+    // --- Synchronous Main-Thread Execution Helper ---
+
+    public <T> T runOnMainSync(final Callable<T> task, long timeoutMs) throws Exception {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return task.call();
         }
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<T> resultRef = new AtomicReference<T>();
+        final AtomicReference<Throwable> errRef = new AtomicReference<Throwable>();
+
+        m_handler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    resultRef.set(task.call());
+                } catch (Throwable t) {
+                    errRef.set(t);
+                } finally {
+                    latch.countDown();
+                }
+            }
+        });
+
+        boolean ok = latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+        if (!ok) {
+            throw new TimeoutException("Main thread camera call timed out after " + timeoutMs + "ms");
+        }
+        Throwable err = errRef.get();
+        if (err != null) {
+            if (err instanceof Exception) {
+                throw (Exception) err;
+            }
+            throw new RuntimeException(err);
+        }
+        return resultRef.get();
+    }
+
+    // --- Lens Info & Raw CameraEx Queries ---
+
+    public JSONObject buildLensInfoJson() {
+        JSONObject obj = new JSONObject();
+        if (m_camera == null) return obj;
+        try {
+            CameraEx.LensInfo li = m_camera.getLensInfo();
+            if (li != null) {
+                obj.put("LensName", li.LensName);
+                obj.put("LensType", li.LensType);
+                obj.put("LensId", li.LensId);
+                obj.put("LensVersion", li.LensVersion);
+                obj.put("FixedAperture", li.FixedAperture);
+                obj.put("PhaseShiftSensor", li.PhaseShiftSensor);
+                if (li.FocalLength != null) {
+                    JSONObject fl = new JSONObject();
+                    fl.put("wide", li.FocalLength.wide);
+                    fl.put("tele", li.FocalLength.tele);
+                    obj.put("FocalLength", fl);
+                }
+                if (li.MinFValue != null) {
+                    JSONObject minF = new JSONObject();
+                    minF.put("wide", li.MinFValue.wide);
+                    minF.put("tele", li.MinFValue.tele);
+                    obj.put("MinFValue", minF);
+                }
+                if (li.MaxFValue != null) {
+                    JSONObject maxF = new JSONObject();
+                    maxF.put("wide", li.MaxFValue.wide);
+                    maxF.put("tele", li.MaxFValue.tele);
+                    obj.put("MaxFValue", maxF);
+                }
+            }
+        } catch (Throwable t) {
+            try {
+                obj.put("error", t.toString());
+            } catch (Throwable ignored) {
+            }
+        }
+        return obj;
+    }
+
+    // --- Raw Camera.Parameters Access ---
+
+    public JSONObject getRawParamsJson() {
+        JSONObject map = new JSONObject();
+        if (m_camera == null) return map;
+        String flat = m_camera.getNormalCamera().getParameters().flatten();
+        if (flat != null) {
+            String[] pairs = flat.split(";");
+            for (String p : pairs) {
+                int eq = p.indexOf('=');
+                if (eq > 0) {
+                    String k = p.substring(0, eq);
+                    String v = p.substring(eq + 1);
+                    try {
+                        map.put(k, v);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+        return map;
+    }
+
+    public void setRawParams(JSONObject updates) throws Exception {
+        if (m_camera == null) throw new IllegalStateException("Camera not open");
+        Camera.Parameters params = m_camera.createEmptyParameters();
+        Iterator<String> it = updates.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            String v = String.valueOf(updates.get(k));
+            params.set(k, v);
+        }
+        m_camera.getNormalCamera().setParameters(params);
     }
 
     // --- Hardware LiveView Sequence (Sony CameraSequence API) ---
 
     private void startLiveviewSequence() {
+        if (m_camera == null || m_cameraSequence != null) {
+            return;
+        }
         synchronized (m_frameLock) {
-            if (m_camera == null || m_cameraSequence != null) {
-                return;
-            }
             try {
                 m_cameraSequence = CameraSequence.open(m_camera);
                 if (m_cameraSequence != null) {
                     CameraSequence.Options opts = new CameraSequence.Options();
+                    opts.setOption("MEMORY_MAP_FILE", getLibPath("lib_memorymap.so"));
+                    opts.setOption("EXPOSURE_COUNT", 1);
+                    opts.setOption("RECORD_COUNT", 1);
+                    opts.setOption("INTERIM_PRE_REVIEW_ENABLED", false);
+                    opts.setOption("AUTO_RELEASE_LOCK_ENABLED", false);
                     opts.setOption("PREVIEW_FRAME_RATE", 30000);
                     opts.setOption("PREVIEW_FRAME_WIDTH", 640);
                     opts.setOption("PREVIEW_FRAME_HEIGHT", 0);
-                    opts.setOption("PREVIEW_FRAME_FORMAT", 256); // 256 = JPEG
-                    opts.setOption("PREVIEW_FRAME_MAX_NUM", 1);
-                    opts.setOption("JPEG_COMPRESS_RATE_DENOM", 15);
-                    opts.setOption("JPEG_COMPRESS_MAX_SIZE", 100);
-                    opts.setOption("INTERIM_PRE_REVIEW_ENABLED", true);
+                    m_cameraSequence.setReleaseLock(false);
                     m_cameraSequence.startPreviewSequence(opts);
                     Logger.info("CameraSequence LiveView started (640px JPEG)");
                 }
             } catch (Throwable t) {
                 Logger.error("startLiveviewSequence error: " + t.toString());
-                stopLiveviewSequence();
+                m_cameraSequence = null;
             }
         }
     }
@@ -523,27 +814,30 @@ public class MacroServerActivity extends BaseActivity
         }
     }
 
+    private String getLibPath(String libName) {
+        return "/data/data/" + getPackageName() + "/lib/" + libName;
+    }
+
     public byte[] getLatestLiveViewJpeg() {
         synchronized (m_frameLock) {
             long now = System.currentTimeMillis();
-            if (m_cameraSequence != null && m_state != State.capturing && (now - m_lastLiveviewFetchMs) >= 40) {
-                m_lastLiveviewFetchMs = now;
+            if (m_cameraSequence != null && (now - m_lastLiveviewFetchMs) >= 40) {
                 DeviceMemory[] frames = null;
                 try {
                     frames = m_cameraSequence.getPreviewSequenceFrames(1);
                     if (frames != null && frames.length > 0 && frames[0] != null) {
-                        DeviceBuffer dbuf = (DeviceBuffer) frames[0];
-                        int dataSize = dbuf.getSize();
-                        if (dataSize > 0 && dataSize <= LIVEVIEW_BUF_CAPACITY) {
-                            if (m_liveviewByteBuf == null) {
-                                m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
-                            }
+                        DeviceBuffer buf = (DeviceBuffer) frames[0];
+                        if (m_liveviewByteBuf == null) {
+                            m_liveviewByteBuf = ByteBuffer.allocateDirect(LIVEVIEW_BUF_CAPACITY);
+                        }
+                        m_liveviewByteBuf.clear();
+                        int size = buf.read(m_liveviewByteBuf);
+                        if (size > 0 && size <= LIVEVIEW_BUF_CAPACITY) {
+                            byte[] jpeg = new byte[size];
                             m_liveviewByteBuf.rewind();
-                            dbuf.read(m_liveviewByteBuf, dataSize, 0);
-                            m_liveviewByteBuf.rewind();
-                            byte[] jpeg = new byte[dataSize];
-                            m_liveviewByteBuf.get(jpeg, 0, dataSize);
+                            m_liveviewByteBuf.get(jpeg, 0, size);
                             m_latestJpeg = jpeg;
+                            m_lastLiveviewFetchMs = now;
                         }
                     }
                 } catch (Throwable t) {
@@ -669,337 +963,16 @@ public class MacroServerActivity extends BaseActivity
         stopLiveviewSequence();
     }
 
-    // --- Public API Methods called from MacroHttpServer ---
-
-    public void driveFocusStep(final boolean far, final int speed) {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null || m_state == State.error || m_state == State.bracketing) {
-                    return;
-                }
-                int clampedSpeed = Math.max(1, Math.min(4, speed));
-                int stepDelta;
-                if (clampedSpeed == 1) {
-                    stepDelta = 1;
-                } else if (clampedSpeed == 2) {
-                    stepDelta = 3;
-                } else if (clampedSpeed == 3) {
-                    stepDelta = 6;
-                } else {
-                    stepDelta = 12;
-                }
-
-                int basePos = (m_state == State.focusing) ? m_targetFocus : m_curFocus;
-                int nextTarget = basePos + (far ? stepDelta : -stepDelta);
-                if (m_maxFocus > 0) {
-                    nextTarget = Math.max(0, Math.min(m_maxFocus, nextTarget));
-                } else {
-                    nextTarget = Math.max(0, nextTarget);
-                }
-
-                m_handler.removeCallbacks(m_checkFocusRunnable);
-                m_focusQueue.clear();
-                m_targetFocus = nextTarget;
-                if (m_curFocus == m_targetFocus && m_maxFocus > 0) {
-                    m_state = State.idle;
-                    updateStatusText();
-                    return;
-                }
-                m_state = State.focusing;
-                m_stuckCount = 0;
-                updateStatusText();
-                driveTowardTarget();
-            }
-        });
-    }
-
-    public void gotoFocusPosition(final int targetPos) {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null || m_state == State.error) {
-                    return;
-                }
-                m_handler.removeCallbacks(m_checkFocusRunnable);
-                m_focusQueue.clear();
-                m_targetFocus = Math.max(0, Math.min(m_maxFocus > 0 ? m_maxFocus : targetPos, targetPos));
-                if (m_curFocus == m_targetFocus) {
-                    m_state = State.idle;
-                    updateStatusText();
-                    return;
-                }
-                m_state = State.focusing;
-                m_stuckCount = 0;
-                updateStatusText();
-                driveTowardTarget();
-            }
-        });
-    }
-
-    public void controlZoom(final String dir, final String action, final Integer digitalMag, final Integer previewMag) {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null) {
-                    return;
-                }
-                try {
-                    if (previewMag != null) {
-                        if (previewMag <= 0) {
-                            m_camera.stopPreviewMagnification();
-                            m_previewMag = 0;
-                        } else {
-                            m_camera.setPreviewMagnification(previewMag, new Pair<Integer, Integer>(0, 0));
-                            m_previewMag = previewMag;
-                        }
-                        updateStatusText();
-                        return;
-                    }
-
-                    if (digitalMag != null) {
-                        if (digitalMag <= 100) {
-                            m_camera.resetDigitalZoom();
-                            m_digitalZoom = 100;
-                        } else {
-                            m_camera.setDigitalZoom(digitalMag);
-                            m_digitalZoom = digitalMag;
-                        }
-                        updateStatusText();
-                        return;
-                    }
-
-                    if ("stop".equalsIgnoreCase(action)) {
-                        m_handler.removeCallbacks(m_stopZoomRunnable);
-                        m_camera.stopZoom();
-                        return;
-                    }
-
-                    boolean zoomIn = !"out".equalsIgnoreCase(dir) && !"wide".equalsIgnoreCase(dir);
-                    int zoomDir = zoomIn ? CameraEx.ZOOM_DIRECTION_TELE : CameraEx.ZOOM_DIRECTION_WIDE;
-                    m_handler.removeCallbacks(m_stopZoomRunnable);
-                    m_camera.startZoom(zoomDir, 2);
-
-                    if (!"start".equalsIgnoreCase(action)) {
-                        m_handler.postDelayed(m_stopZoomRunnable, 140);
-                    }
-                } catch (Throwable t) {
-                    Logger.error("controlZoom error: " + t.toString());
-                }
-            }
-        });
-    }
-
-    public void startBracket(final int minPos, final int maxPos, final int shots) {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null || m_state == State.error) {
-                    return;
-                }
-                int start = Math.min(minPos, maxPos);
-                int end = Math.max(minPos, maxPos);
-                int count = Math.max(2, shots);
-
-                m_focusQueue.clear();
-                float step = (float) (end - start) / (float) (count - 1);
-                for (int i = 0; i < count; i++) {
-                    int pos = Math.round(start + i * step);
-                    if (m_focusQueue.isEmpty() || m_focusQueue.getLast() != pos) {
-                        m_focusQueue.addLast(pos);
-                    }
-                }
-                if (m_focusQueue.isEmpty()) {
-                    return;
-                }
-                m_targetFocus = m_focusQueue.getFirst();
-                m_state = State.bracketing;
-                m_stuckCount = 0;
-                updateStatusText();
-                if (m_curFocus == m_targetFocus) {
-                    takePictureInternal();
-                } else {
-                    driveTowardTarget();
-                }
-            }
-        });
-    }
-
-    public void abortBracket() {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                m_handler.removeCallbacks(m_checkFocusRunnable);
-                m_focusQueue.clear();
-                if (m_state == State.bracketing || m_state == State.focusing) {
-                    m_state = State.idle;
-                }
-                updateStatusText();
-            }
-        });
-    }
-
-    public void captureSingle() {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null || m_state == State.error) {
-                    return;
-                }
-                m_state = State.capturing;
-                updateStatusText();
-                takePictureInternal();
-            }
-        });
-    }
-
-    public void adjustExposure(final String apertureOp, final String shutterOp, final String isoOp, final Integer isoVal) {
-        m_handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (m_camera == null) {
-                    return;
-                }
-                try {
-                    if ("inc".equalsIgnoreCase(apertureOp)) {
-                        m_camera.incrementAperture();
-                    } else if ("dec".equalsIgnoreCase(apertureOp)) {
-                        m_camera.decrementAperture();
-                    }
-
-                    if ("inc".equalsIgnoreCase(shutterOp)) {
-                        m_camera.incrementShutterSpeed();
-                    } else if ("dec".equalsIgnoreCase(shutterOp)) {
-                        m_camera.decrementShutterSpeed();
-                    }
-
-                    if (isoVal != null) {
-                        Camera.Parameters params = m_camera.createEmptyParameters();
-                        m_camera.createParametersModifier(params).setISOSensitivity(isoVal);
-                        m_camera.getNormalCamera().setParameters(params);
-                        m_iso = isoVal;
-                    } else if (isoOp != null && m_supportedIsos != null && !m_supportedIsos.isEmpty()) {
-                        // Continuous ISO step: AUTO(0) <-> 100 <-> 125 <-> 160 <-> 200 <-> ... <-> 25600
-                        int cur = m_iso;
-                        int next = cur;
-                        if ("inc".equalsIgnoreCase(isoOp)) {
-                            if (cur == 0) {
-                                next = m_supportedIsos.get(0);
-                            } else {
-                                for (int val : m_supportedIsos) {
-                                    if (val > cur) {
-                                        next = val;
-                                        break;
-                                    }
-                                }
-                            }
-                        } else if ("dec".equalsIgnoreCase(isoOp)) {
-                            if (cur != 0) {
-                                int prev = 0; // fallback to AUTO
-                                for (int val : m_supportedIsos) {
-                                    if (val >= cur) {
-                                        break;
-                                    }
-                                    prev = val;
-                                }
-                                next = prev;
-                            }
-                        }
-                        if (next != cur) {
-                            Camera.Parameters params = m_camera.createEmptyParameters();
-                            m_camera.createParametersModifier(params).setISOSensitivity(next);
-                            m_camera.getNormalCamera().setParameters(params);
-                            m_iso = next;
-                        }
-                    }
-                    updateStatusText();
-                } catch (Throwable t) {
-                    Logger.error("adjustExposure error: " + t.toString());
-                }
-            }
-        });
-    }
-
-    private void driveTowardTarget() {
-        int target = (m_state == State.bracketing && !m_focusQueue.isEmpty()) ? m_focusQueue.getFirst() : m_targetFocus;
-        m_focusBeforeDrive = m_curFocus;
-        if (m_curFocus == target) {
-            if (m_state == State.bracketing) {
-                takePictureInternal();
-            } else {
-                m_state = State.idle;
-                updateStatusText();
-            }
-            return;
-        }
-        int absDiff = Math.abs(m_curFocus - target);
-        int speed;
-        if (absDiff > 25) {
-            speed = 4;
-        } else if (absDiff > 20) {
-            speed = 3;
-        } else if (absDiff > 15) {
-            speed = 2;
-        } else {
-            speed = 1;
-        }
-        try {
-            m_handler.removeCallbacks(m_checkFocusRunnable);
-            m_camera.startOneShotFocusDrive(
-                    m_curFocus < target ? CameraEx.FOCUS_DRIVE_DIRECTION_FAR : CameraEx.FOCUS_DRIVE_DIRECTION_NEAR,
-                    speed);
-            m_handler.postDelayed(m_checkFocusRunnable, 50);
-        } catch (Throwable t) {
-            Logger.error("driveTowardTarget error: " + t.toString());
-            m_state = State.idle;
-            updateStatusText();
-        }
-    }
-
-    private void takePictureInternal() {
-        try {
-            m_camera.burstableTakePicture();
-        } catch (Throwable t) {
-            Logger.error("takePictureInternal error: " + t.toString());
-            m_state = State.idle;
-            updateStatusText();
-        }
-    }
-
-    @Override
-    public void onShutter(int i, CameraEx cameraEx) {
-        try {
-            m_camera.cancelTakePicture();
-        } catch (Throwable ignored) {
-        }
-        if (m_state == State.bracketing) {
-            if (i == 0 && !m_focusQueue.isEmpty()) {
-                m_focusQueue.removeFirst();
-                if (m_focusQueue.isEmpty()) {
-                    m_state = State.idle;
-                    updateStatusText();
-                } else {
-                    m_targetFocus = m_focusQueue.getFirst();
-                    m_stuckCount = 0;
-                    updateStatusText();
-                    driveTowardTarget();
-                }
-            } else {
-                m_focusQueue.clear();
-                m_state = State.idle;
-                updateStatusText();
-            }
-        } else {
-            m_state = State.idle;
-            updateStatusText();
-        }
-    }
-
     // --- Physical Camera Keys ---
 
     @Override
     protected boolean onEnterKeyDown() {
-        captureSingle();
+        try {
+            if (m_camera != null) {
+                m_camera.burstableTakePicture();
+            }
+        } catch (Throwable ignored) {
+        }
         return true;
     }
 
@@ -1012,27 +985,5 @@ public class MacroServerActivity extends BaseActivity
     @Override
     protected void setColorDepth(boolean highQuality) {
         super.setColorDepth(false);
-    }
-
-    // --- Status JSON Builder ---
-
-    public String getStatusJson() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"state\":\"").append(m_state.name()).append("\",");
-        sb.append("\"currentFocus\":").append(m_curFocus).append(",");
-        sb.append("\"maxFocus\":").append(m_maxFocus).append(",");
-        sb.append("\"remainingShots\":").append(m_focusQueue.size()).append(",");
-        sb.append("\"aperture\":").append(m_aperture).append(",");
-        sb.append("\"apertureFormatted\":\"").append(m_aperture > 0 ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--").append("\",");
-        sb.append("\"shutterSpeed\":\"").append(m_shutterSpeed).append("\",");
-        sb.append("\"iso\":").append(m_iso).append(",");
-        sb.append("\"opticalZoom\":").append(m_opticalZoom).append(",");
-        sb.append("\"digitalZoom\":").append(m_digitalZoom).append(",");
-        sb.append("\"previewMagnification\":").append(m_previewMag).append(",");
-        sb.append("\"wifiIp\":\"").append(m_wifiIp).append("\",");
-        sb.append("\"port\":").append(m_httpPort);
-        sb.append("}");
-        return sb.toString();
     }
 }

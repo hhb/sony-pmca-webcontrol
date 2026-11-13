@@ -1,175 +1,309 @@
-# Sony PMCA WebControl — Usage & API Guide (`USAGE.md`)
+# Sony PMCA WebControl — Usage & API Reference (`USAGE.md`)
 
-This document instructs **human operators** and **AI Agents** on building and installing the in-camera APK, connecting a compatible Sony PlayMemories camera to Wi-Fi, and controlling the camera via a web browser, HTTP REST API, or Python SDK.
+This document is the complete reference for building, flashing, and developing clients or AI Agents against **Sony PMCA WebControl** (`com.sony.pmca.webcontrol`).
+
+The camera-side application acts as a **thin, stateless hardware bridge** exposing Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and `CameraSequence` APIs over HTTP/JSON. Higher-level workflows (such as closed-loop focus positioning, target aperture/shutter stepping, and automated focus bracketing) are implemented in client SDKs (see `client/pmca_client.py`).
 
 ---
 
-## Part 1: Requirements & Installation (One-Time Setup)
+## Part 1: Build & Flashing
 
-### 1. Hardware & Software Requirements
-* **Camera**: Any PlayMemories-compatible Sony camera with Scalar Platform $\ge 2.3$:
-  * **APS-C**: `a5100`, `a6000`, `a6300`, `a6500`
-  * **Full-Frame**: `a7 II`, `a7R II`, `a7S II` (plus `a7` / `a7R` / `a7S` on latest firmware)
-  * **Cyber-shot**: `RX100 III / IV / V`, `RX10 II / III`, `RX1R II`
-* **Lens**: **An E-mount lens with electronic contacts and an autofocus (AF) motor** is required for remote focus stepping and focus bracketing (e.g., a native AF macro lens, any Sony AF lens paired with electronic AF macro extension tubes, or built-in motorized lenses on RX cameras).
-* **Saved Wi-Fi Network**: Connect the camera to your home/studio Wi-Fi router at least once in the stock camera settings (`Wireless` → `Access Point Set.`) so the SSID and password are saved in the camera's configuration.
-* **Host Environment**:
-  * Python 3.9+ inside a virtual environment (`.venv`).
-  * For compilation: JDK 8 (`OpenJDK 8`) and Android SDK (`platforms;android-10`, `build-tools;25.0.2`), or GitHub Actions.
-  * For flashing: Linux (recommended) or Windows with [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE).
+### 1. Build the Camera APK
 
-### 2. Building the APK
-A GitHub Actions workflow (`.github/workflows/build.yml`) is included. Pushing this repository to GitHub automatically builds `sony-pmca-webcontrol-debug-1.0.0.apk` as a downloadable workflow artifact.
+Requires JDK 8, Android SDK Platform 10 (`android-2.3.3`), and Build Tools `25.0.2`:
 
-To build locally:
 ```bash
 cd camera-app
 ./gradlew assembleDebug
-# Output APK: camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
 ```
 
-### 3. Flashing the APK to the Camera
-Flashing works best on **Linux** (via native `libusb`, no custom drivers needed) or **Windows** (using the prebuilt GUI/CLI release).
+Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk`
 
-* **Official Tool (`pmca-console` / `pmca-gui`)**: [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (Prebuilt binaries: [Releases](https://github.com/ma1co/Sony-PMCA-RE/releases))
-* **Community Rust Alternative**: [masterflai/pmca-re-reloaded](https://github.com/masterflai/pmca-re-reloaded)
+### 2. Flash to Camera via USB (`pmca-console`)
 
-Steps to flash on Linux using a Python `venv`:
-1. On the camera menu: `Setup` → `USB Connection` → set to **`Mass Storage`** or **`MTP`**.
-2. Connect the camera to your computer via a data-capable Micro-USB cable and run:
-   ```bash
-   python3 -m venv .venv
-   ./.venv/bin/pip install -r tools/Sony-PMCA-RE/requirements.txt
-   sudo ./.venv/bin/python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
-   ```
-3. Unplug the USB cable. Open the camera's `Application List` to find **`PMCA WebControl`**.
+Connect the camera via USB (MTP / Mass Storage mode) and run:
 
-### 4. Starting the In-Camera Server
-1. Set the physical mode dial on the camera to **`M` (Manual Exposure)**.
-2. Launch **`PMCA WebControl`** from the camera's `Application List`.
-3. Within a few seconds, the top bar on the camera LCD will display:
-   `READY (<SSID>): http://192.168.x.x:8080`
-   Note this IP address (e.g., `192.168.1.105`).
+```bash
+python tools/Sony-PMCA-RE/pmca-console.py install -f camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk
+```
+
+### 3. Launch on Camera
+
+1. Disconnect USB.
+2. On the camera: **Menu → Application → Application List → PMCA WebControl**.
+3. Wait for the camera to join your configured Wi-Fi network. The LAN URL (e.g., `http://192.168.0.250:8080`) appears at the bottom of the camera screen.
 
 ---
 
-## Part 2: Web Browser UI (Mac / iPad)
+## Part 2: HTTP REST API Specification
 
-Open `http://<camera-ip>:8080` in Safari or Chrome on any device on the same Wi-Fi network:
-* **Live View**: Streams live preview frames automatically every ~180ms.
-* **Manual Focus Stepping**: Use `◀◀◀`, `◀◀`, `◀ Near` (focus closer) or `Far ▶`, `▶▶`, `▶▶▶` (focus farther).
-* **Automated Focus Stacking**:
-  1. Step the focus to the closest tip of the subject and click **`Set Near`**.
-  2. Step the focus to the farthest edge of the subject and click **`Set Far`**.
-  3. Enter the number of `Shots` (e.g., `20`) and click **`Start Stack`**.
-* **Exposure & Single Shot**: Adjust `F -` / `F +`, `Shutter -` / `Shutter +`, `ISO 100` / `ISO 400`, or click **`Capture`**.
+All endpoints support CORS (`Access-Control-Allow-Origin: *`).
+Camera calls are marshaled to the Android main thread with a **3000 ms timeout** (returning HTTP `504 Gateway Timeout` if the camera firmware blocks). Errors return `{"ok": false, "error": "..."}`.
 
 ---
 
-## Part 3: HTTP REST API Reference (For Scripts & AI Agents)
+### 1. State & Real-Time Event Bus
 
-Base URL: `http://<camera-ip>:8080` (CORS enabled on all endpoints).
+#### `GET /api/state`
+Returns the latest cached snapshots from all registered `CameraEx` listeners plus the current monotonic event sequence number (`seq`).
 
-### 1. Get Camera Status
-* **`GET /api/status`**
-* **Response (`application/json`)**:
+**Response Example:**
+```json
+{
+  "ok": true,
+  "seq": 1042,
+  "aperture": {
+    "currentAperture": 560,
+    "currentAvailableMin": 350,
+    "currentAvailableMax": 2200
+  },
+  "shutter": {
+    "currentShutterSpeed_n": 1,
+    "currentShutterSpeed_d": 125,
+    "currentAvailableMin_n": 1,
+    "currentAvailableMin_d": 4000,
+    "currentAvailableMax_n": 30,
+    "currentAvailableMax_d": 1
+  },
+  "focus": {
+    "currentPosition": 312,
+    "maxPosition": 847
+  },
+  "zoom": {
+    "opticalPosition": 0,
+    "opticalMagnification": 100,
+    "digitalPosition": 0,
+    "digitalMagnification": 100,
+    "digitalZoomType": "precision",
+    "stopped": true
+  },
+  "autoIso": 400,
+  "focalLength": 50,
+  "powerZoom": 0,
+  "previewMagnification": {
+    "enabled": false,
+    "ratio": 0
+  },
+  "lastStoreImage": {
+    "status": 0,
+    "DirectoryName": "100MSDCF",
+    "FileName": "DSC01234.JPG",
+    "DirectoryNo": 100,
+    "FileNo": 1234,
+    "MediaId": 1
+  },
+  "lastShutterStatus": 0,
+  "capturing": false,
+  "lens": {
+    "LensName": "FE 90mm F2.8 Macro G OSS",
+    "LensType": "E-mount",
+    "FixedAperture": false,
+    "FocalLength": { "wide": 90, "tele": 90 },
+    "MinFValue": { "wide": 280, "tele": 280 },
+    "MaxFValue": { "wide": 2200, "tele": 2200 }
+  },
+  "wifi": {
+    "ip": "192.168.0.250",
+    "port": 8080
+  }
+}
+```
+
+> **Raw Units:**
+> * `Aperture`: `F-number * 100` (e.g., `560` = `F5.6`, `280` = `F2.8`).
+> * `Shutter`: fraction `n / d` seconds (e.g., `1/125`s or `30/1`s).
+> * `Zoom magnification`: `100` = `1.0x`, `140` = `1.4x`, `200` = `2.0x`.
+
+---
+
+#### `GET /api/events?since=<seq>&timeout=<sec>`
+Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least one event with `seq > since` occurs, or until `timeout` seconds elapse (`0..30`, default `10`).
+
+**Response:**
+```json
+{
+  "ok": true,
+  "seq": 1044,
+  "events": [
+    {
+      "seq": 1043,
+      "t": 1731475200123,
+      "type": "FocusDrive",
+      "data": { "currentPosition": 315, "maxPosition": 847 }
+    },
+    {
+      "seq": 1044,
+      "t": 1731475200890,
+      "type": "StoreImageComplete",
+      "data": { "status": 0, "DirectoryName": "100MSDCF", "FileName": "DSC01235.JPG" }
+    }
+  ]
+}
+```
+
+**Emitted Event Types:**
+* `ApertureChange` — `{ currentAperture, currentAvailableMin, currentAvailableMax }`
+* `ShutterSpeedChange` — `{ currentShutterSpeed_n, currentShutterSpeed_d, currentAvailableMin_*, currentAvailableMax_* }`
+* `AutoISOSensitivity` — `{ iso }` (effective ISO chosen when ISO is `0` / AUTO)
+* `FocusDrive` — `{ currentPosition, maxPosition }`
+* `AutoFocusStart` — `{}`
+* `AutoFocusDone` — `{ status, focusAreaIds }`
+* `ZoomChange` — `{ opticalPosition, opticalMagnification, digitalPosition, digitalMagnification, digitalZoomType, stopped }`
+* `FocalLengthChange` — `{ focalLength }`
+* `PowerZoom` — `{ status }`
+* `PreviewMagnification` — `{ enabled, ratio, pos }`
+* `PreviewMagnificationInfo` — `{ enabled, pos }`
+* `Shutter` — `{ status }` (`0` = OK, `1` = CANCELED, `2` = ERROR)
+* `CaptureStart` / `CaptureEnd` — `{ capturing, reason }`
+* `Jpeg` — `{ size }` (in-memory review JPEG captured)
+* `StoreImageComplete` — `{ status, DirectoryName, FileName, DirectoryNo, FileNo, MediaId }`
+* `SettingChanged` — `{ types: [...] }` (triggered by physical camera dials/menus or parameter writes)
+* `EquipmentChange` — `{ deviceType, status }` (lens/flash attach/detach)
+* `Error` — `{ error }`
+
+---
+
+### 2. Direct `CameraEx` Commands (`/api/camera/<action>`)
+
+Whitelisted 1-to-1 wrappers for `com.sony.scalar.hardware.CameraEx` methods. Most command methods return asynchronously via `/api/events`.
+
+#### Aperture & Shutter (Dial Stepping)
+| Endpoint | Method | Parameters | Underlying `CameraEx` Call |
+|---|---|---|---|
+| `/api/camera/incrementAperture` | POST | — | `incrementAperture()` |
+| `/api/camera/decrementAperture` | POST | — | `decrementAperture()` |
+| `/api/camera/adjustAperture` | POST | `n` (or `steps`, int) | `adjustAperture(n)` |
+| `/api/camera/incrementShutterSpeed` | POST | — | `incrementShutterSpeed()` |
+| `/api/camera/decrementShutterSpeed` | POST | — | `decrementShutterSpeed()` |
+| `/api/camera/adjustShutterSpeed` | POST | `n` (or `steps`, int) | `adjustShutterSpeed(n)` |
+| `/api/camera/adjustProgramLine` | POST | `n` (or `steps`, int) | `adjustProgramLine(n)` |
+
+#### Focus Motor & Autofocus
+| Endpoint | Method | Parameters | Underlying `CameraEx` Call |
+|---|---|---|---|
+| `/api/camera/startOneShotFocusDrive` | POST | `dir` (`0`=NEAR, `1`=FAR), `speed` (`1..4`) | `startOneShotFocusDrive(dir, speed)` |
+| `/api/camera/shiftFocusPosition` | POST | `n` (int delta) | `shiftFocusPosition(n)` → returns `{"result": boolean}` |
+| `/api/camera/startFocusHold` | POST | — | `startFocusHold()` |
+| `/api/camera/stopFocusHold` | POST | — | `stopFocusHold()` |
+| `/api/camera/executeAutoFocusStartTrigger` | POST | `halfPress` (`true`/`false`), `mode` (optional) | `executeAutoFocusStartTrigger(halfPress, mode)` |
+
+#### Zoom & MF Assist Magnification
+| Endpoint | Method | Parameters | Underlying `CameraEx` Call |
+|---|---|---|---|
+| `/api/camera/startZoom` | POST | `dir` (`0`=TELE/In, `1`=WIDE/Out), `speed` (int) | `startZoom(dir, speed)` |
+| `/api/camera/stopZoom` | POST | — | `stopZoom()` |
+| `/api/camera/setDigitalZoom` | POST | `v` (int, e.g. `140`, `200`, `400`) | `setDigitalZoom(v)` |
+| `/api/camera/resetDigitalZoom` | POST | — | `resetDigitalZoom()` |
+| `/api/camera/setPreviewMagnification` | POST | `ratio` (int, e.g. `590`, `1170`), `x`, `y` | `setPreviewMagnification(ratio, Pair(x,y))` |
+| `/api/camera/stopPreviewMagnification` | POST | — | `stopPreviewMagnification()` |
+
+#### Capture & Hardware Queries
+| Endpoint | Method | Parameters | Underlying `CameraEx` Call |
+|---|---|---|---|
+| `/api/camera/burstableTakePicture` | POST | — | `burstableTakePicture()` |
+| `/api/camera/cancelTakePicture` | POST | — | `cancelTakePicture()` |
+| `/api/camera/cancelExposure` | POST | — | `cancelExposure()` (ends BULB exposure) |
+| `/api/camera/getLensInfo` | GET | — | `getLensInfo()` |
+| `/api/camera/getInhibitionInfo` | GET | — | `getInhibitionInfo()` |
+| `/api/camera/capabilities` | GET | — | `getLensInfo()` + all `ParametersModifier.is*Supported()` flags |
+
+---
+
+### 3. `ParametersModifier` Reflection Proxy (`/api/modifier`)
+
+Exposes all ~340 `is*`, `get*`, `getSupported*`, `getMin*`, `getMax*`, and `set*` methods of `CameraEx.ParametersModifier` with zero hardcoded business logic (`tryIgnoreInhibit` is excluded). Method objects are cached at startup.
+
+* **`GET /api/modifier`**: Self-documenting introspection endpoint returning every callable method name, parameter types, and return type.
+* **`GET /api/modifier/<methodName>`**: Invokes a getter/query on `getParameters()`. Optional positional arguments: `?arg0=...&arg1=...` or `?v=...`.
+  * `GET /api/modifier/getSupportedISOSensitivities` → `{"ok":true,"method":"getSupportedISOSensitivities","result":[0,100,125,160,...]}`
+  * `GET /api/modifier/getISOSensitivity` → `{"ok":true,"method":"getISOSensitivity","result":400}`
+  * `GET /api/modifier/getMaxColorTemperatureForWhiteBalance`
+* **`GET /api/modifier?get=Method1,Method2,...`**: **Batch read** executing all parameterless getters against a single `getParameters()` IPC call. You can omit the `get`/`is` prefix (e.g., `?get=ISOSensitivity,DROMode`).
+* **`POST /api/modifier/<methodName>?v=<val>`** (or JSON body `{"v": ...}` / `{"args": [...]}`): Invokes a setter via `createEmptyParameters()` + `setParameters()`.
+  * `POST /api/modifier/setISOSensitivity?v=800`
+  * `POST /api/modifier/setColorTemperatureForWhiteBalance?v=5600`
+* **`POST /api/modifier`** with JSON body: **Batch write** applying multiple setters in a single `setParameters()` call. Keys may include or omit the `set` prefix:
   ```json
   {
-    "state": "idle",
-    "currentFocus": 72,
-    "maxFocus": 255,
-    "remainingShots": 0,
-    "aperture": 800,
-    "apertureFormatted": "F8.0",
-    "shutterSpeed": "1/10",
-    "iso": 100,
-    "wifiIp": "192.168.1.105"
+    "ISOSensitivity": 800,
+    "DROMode": "off",
+    "ColorTemperatureForWhiteBalance": 5500
   }
   ```
-* `state` values:
-  * `idle` — Ready for commands.
-  * `focusing` — Driving lens toward a target focus position.
-  * `capturing` — Taking a single photo.
-  * `bracketing` — Executing an automated focus-bracket sequence (`remainingShots` indicates progress).
-  * `error` — Hardware/lens focus drive unsupported.
 
-### 2. Fetch Live View Frame
-* **`GET /api/liveview.jpg`**
-* **Response**: `image/jpeg` binary frame (returns HTTP `500` if the preview pipeline has not produced its first frame yet).
-
-### 3. Single-Step Manual Focus Drive
-* **`POST /api/focus/drive?dir=<near|far>&speed=<1..4>`**
-* **Query Parameters**:
-  * `dir`: `near` (focus closer) or `far` (focus farther).
-  * `speed`: Step size from `1` (finest micro-step) to `4` (largest step).
-
-### 4. Closed-Loop Goto Focus Position
-* **`POST /api/focus/goto?pos=<int>`**
-* **Query Parameters**:
-  * `pos`: Target integer coordinate in `[0, maxFocus]`.
-* **Behavior**: Asynchronous. Poll `GET /api/status` until `state == "idle"`.
-
-### 5. Start Automated Focus Bracketing
-* **`POST /api/bracket?min=<int>&max=<int>&shots=<int>`**
-* **Query Parameters**:
-  * `min`: Starting focus coordinate.
-  * `max`: Ending focus coordinate.
-  * `shots`: Total number of frames to capture (`>= 2`).
-* **Behavior**: Steps focus evenly from `min` to `max` and saves `shots` photos to the camera SD card. Poll `GET /api/status` (`remainingShots`) until `state == "idle"`.
-
-### 6. Abort Active Focus Bracket
-* **`POST /api/bracket/abort`**
-
-### 7. Trigger Single Capture
-* **`POST /api/capture`**
-
-### 8. Adjust Exposure Parameters
-* **`POST /api/exposure?aperture=<inc|dec>&shutter=<inc|dec>&iso=<int>&isoOp=<inc|dec>`**
-* All query parameters are optional and can be combined:
-  * `aperture=inc` (stop down, e.g., F5.6 → F6.3) or `dec` (open up).
-  * `shutter=inc` (faster shutter, e.g., 1/10 → 1/13) or `dec` (slower shutter).
-  * `isoOp=inc` (step ISO up, e.g. AUTO → 100 → 125 → 160...) or `dec` (step ISO down).
-  * `iso=100` (set specific ISO sensitivity directly; `0` for AUTO).
-
-### 9. Zoom and MF Assist Preview Magnification
-* **`POST /api/zoom?dir=<in|out>&action=<start|stop>`** — Power Zoom continuous drive.
-* **`POST /api/zoom?mag=<1.0|1.4|2.0|4.0>`** — Set digital zoom scale factor.
-* **`POST /api/zoom?magnify=<toggle|off|5.9|11.7>`** — Toggle in-camera MF Assist preview magnification for precision manual focus inspection.
-
-### 10. Photo Listing and Downloads
-* **`GET /api/photos`** — Returns JSON list of all captured photos (`.JPG` and `.ARW`) on the camera SD card.
-* **`GET /api/photos/latest`** — Downloads the most recently taken photo directly as image JPEG/RAW.
-* **`GET /api/photos/download?file=<relativePath>`** — Downloads a specific photo file from the SD card.
+> **Caution (Preview Pipeline Rebuild):** Changing structural image parameters such as `setImageSize`, `setImageAspectRatio`, `setRawRecMode`, `setPictureStorageFormat`, or `setDriveMode` may cause the camera firmware to temporarily tear down and restart its preview pipeline, briefly interrupting `/api/liveview.jpg`.
 
 ---
 
-## Part 4: Python SDK & Automation / AI Agent SOP
+### 4. Raw `android.hardware.Camera.Parameters` (`/api/params`)
 
-The zero-dependency Python client is located at `client/pmca_client.py` (`SonyPmcaClient`):
+Thin key-value bridge for standard Android camera parameters that live outside `ParametersModifier` (such as `exposure-compensation`, `min-exposure-compensation`, `max-exposure-compensation`, `exposure-compensation-step`, `focus-mode`, `whitebalance`, `scene-mode`).
+
+* **`GET /api/params`**: Returns all flattened `Camera.Parameters` key-value pairs.
+* **`GET /api/params/<key>`**: Returns a single parameter string.
+* **`POST /api/params`**: Applies key-value updates via `createEmptyParameters()` + `setParameters()`. Accepts JSON body (e.g., `{"exposure-compensation": "-3"}`) or query parameters.
+
+---
+
+### 5. LiveView & Photo Downloads
+
+* **`GET /api/liveview.jpg`**: Latest 640px hardware JPEG frame from `CameraSequence`.
+* **`GET /api/photos?limit=50`**: Lists `.JPG` / `.ARW` files on SD card sorted newest-first.
+* **`GET /api/photos/latest`**: Downloads the latest captured JPEG (from in-memory capture buffer or SD card).
+* **`GET /api/photos/download?path=<absolutePath>`**: Streams a specific SD card file (JPG or ARW).
+* **`GET /api/log`**: Returns plain-text crash/debug logs from the camera.
+
+---
+
+## Part 3: Python Client SDK (`client/pmca_client.py`)
+
+`SonyPmcaClient` provides both 1-to-1 wrappers and client-side closed-loop workflows:
 
 ```python
 from client.pmca_client import SonyPmcaClient
 
-cam = SonyPmcaClient("192.168.1.105")
+cam = SonyPmcaClient("192.168.0.250", 8080)
 
-# 1. Inspect status and capture a live preview frame
-status = cam.get_status()
-cam.save_liveview("preview.jpg")
+# 1. Inspect capabilities & state
+caps = cam.capabilities()
+state = cam.get_state()
 
-# 2. Adjust exposure (e.g. prevent blown highlights on reflective crystals)
-cam.set_exposure(iso=100, shutter="inc")
+# 2. Direct ParametersModifier batch read/write
+info = cam.modifier_batch_get("ISOSensitivity", "SupportedISOSensitivities", "DROMode")
+cam.modifier_batch_set(ISOSensitivity=100, DROMode="off")
 
-# 3. Move to an exact focus coordinate and wait until idle
-cam.goto_focus(60, wait=True)
+# 3. Direct CameraEx commands
+cam.camera("incrementAperture")
+cam.camera("decrementShutterSpeed")
 
-# 4. Run an automated 25-shot focus bracket stack from 50 to 140
-cam.start_bracket(min_pos=50, max_pos=140, shots=25, wait=True)
+# 4. Client-side closed-loop focus positioning (uses shiftFocusPosition + FocusDrive events)
+cam.goto_focus(350)
+
+# 5. Capture, wait for StoreImageComplete event, and download exact file
+cam.capture_and_download("shot_001.jpg")
+
+# 6. Client-side automated focus bracketing stack with local download
+cam.focus_stack(min_pos=120, max_pos=420, shots=25, save_dir="./stack_output")
 ```
 
-### Automation / AI Agent SOP for Macro Focus Stacking
-When an automated script or AI Agent is tasked with photographing a macro subject using this repository:
-1. **Verify Readiness**: Call `get_status()`. Confirm `state == "idle"` and `maxFocus > 0`. (If `maxFocus == 0`, inform the user that an AF-capable lens or electronic extension tube must be attached).
-2. **Optimize Exposure**: Fetch a preview frame via `get_liveview_jpeg()` or `save_liveview()`. Check for specular highlight clipping on crystal faces. If highlights are clipped, step the shutter faster (`set_exposure(shutter="inc")`) or lower ISO to `100` until highlights are preserved.
-3. **Locate Focus Boundaries**: Sweep focus across the subject using `goto_focus()` or `drive_focus()`, evaluating frame sharpness (via Laplacian variance as shown in `client/example_macro_stack.py` or via vision model inspection) to identify the front-most point (`min_pos`) and back-most edge (`max_pos`).
-4. **Execute Focus Stack**: Call `start_bracket(min_pos, max_pos, shots=N, wait=True)` and monitor until completion.
-5. **Post-Processing Hand-off**: Notify the user that the bracketed RAW/JPEG sequence has been recorded on the camera's SD card and is ready for stacking in Helicon Focus or Zerene Stacker.
+---
+
+## Part 4: Extensible Future Sony APIs (Roadmap for Agents)
+
+The `stubs--SNAPSHOT.jar` in OpenMemories-Framework exposes additional Sony Scalar classes that are **not yet wired** into the HTTP server, should future client applications need them:
+
+1. **Camera Dial & Hardware Input (`ScalarInput`, `KeyStatus`)**:
+   * Listening for physical mode dial changes (`M`/`A`/`S`/`P` via `SettingChangedListener` `TYPE_SCENE_MODE`) or reading custom buttons / rotary dials.
+2. **Additional `CameraEx` Subsystems**:
+   * **Interval Recording**: `startIntervalRec()` / `stopIntervalRec()` + `IntervalRecListener`.
+   * **Tracking & Face Focus**: `startTrackingFocus(x, y)` / `stopTrackingFocus()` + `TrackingFocusListener`, `startFaceDetection()` + `FaceDetectionListener`.
+   * **Custom White Balance Capture**: `captureCustomWhiteBalance()` / `saveCustomWhiteBalance(channel)`.
+   * **Metering & Exposure Evaluation**: `getProperExposureLevel()` + `ProperExposureLevelCallback`, `MeteringModeInfoListener`.
+   * **Extended Gamma Curves**: `createGammaTable()` / `setExtendedGammaTable()`.
+   * **Multi-Media Slot Selection**: `setRecordingMedia(mediaId, callback)`.
+3. **System Telemetry (`com.sony.scalar.sysutil.didep.*`)**:
+   * `Temperature`: Read sensor/body thermal state during long focus stacks.
+   * `Power`: Query battery level percentage and external power status.
+   * `Media` & `AvindexStore`: Query SD card free space and fast indexed media DB queries instead of recursive filesystem scans.
+4. **WebSocket / MJPEG Stream**:
+   * Replace `/api/liveview.jpg` HTTP polling and `/api/events` long-polling with a persistent WebSocket or `multipart/x-mixed-replace` MJPEG stream for lower latency live view.

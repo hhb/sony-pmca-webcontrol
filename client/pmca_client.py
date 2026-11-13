@@ -1,4 +1,12 @@
-"""Python client SDK for Sony PMCA WebControl HTTP Server."""
+"""Zero-dependency Python client SDK for Sony PMCA WebControl.
+
+Built on top of the thin camera REST API:
+- /api/state, /api/events (long-polling)
+- /api/camera/<action> (CameraEx commands & queries)
+- /api/modifier (reflection proxy for CameraEx.ParametersModifier)
+- /api/params (raw android.hardware.Camera.Parameters)
+- /api/liveview.jpg, /api/photos*
+"""
 
 import json
 import os
@@ -9,175 +17,247 @@ from typing import Any, Dict, List, Optional
 
 
 class SonyPmcaClient:
-    """HTTP client to control a Sony PlayMemories camera running the PMCA WebControl APK."""
+    """HTTP client for a camera running Sony PMCA WebControl."""
 
-    def __init__(self, host: str, port: int = 8080, timeout: float = 8.0) -> None:
+    FOCUS_NEAR = 0
+    FOCUS_FAR = 1
+    ZOOM_TELE = 0
+    ZOOM_WIDE = 1
+
+    def __init__(self, host: str, port: int = 8080, timeout: float = 10.0) -> None:
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
 
-    def _request(self, path: str, method: str = "GET") -> bytes:
-        req = urllib.request.Request(f"{self.base_url}{path}", method=method)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+    def _request_json(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"} if data is not None else {}
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _request_bytes(self, path: str, timeout: Optional[float] = None) -> bytes:
+        url = f"{self.base_url}{path}"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
             return resp.read()
 
-    def _json_request(self, path: str, method: str = "GET") -> Dict[str, Any]:
-        raw = self._request(path, method=method)
-        return json.loads(raw.decode("utf-8"))
+    # --- State & Event Long-Polling ---
 
-    def get_status(self) -> Dict[str, Any]:
-        """Return camera state, currentFocus, maxFocus, aperture, shutter, iso, etc."""
-        return self._json_request("/api/status", method="GET")
+    def get_state(self) -> Dict[str, Any]:
+        """Return latest snapshots of Aperture, Shutter, Focus, Zoom, Lens, and seq."""
+        return self._request_json("/api/state")
+
+    def get_events(self, since: int = 0, timeout: int = 10) -> Dict[str, Any]:
+        """Long-poll for camera callback events newer than `since`."""
+        return self._request_json(
+            f"/api/events?since={since}&timeout={timeout}",
+            timeout=max(self.timeout, timeout + 5.0),
+        )
+
+    def wait_for_event(
+        self,
+        event_type: str,
+        since: Optional[int] = None,
+        timeout: float = 15.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Block until an event of `event_type` arrives or timeout expires."""
+        seq = self.get_state().get("seq", 0) if since is None else since
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = max(1, int(deadline - time.time()))
+            res = self.get_events(since=seq, timeout=min(10, remaining))
+            seq = res.get("seq", seq)
+            for ev in res.get("events", []):
+                if ev.get("type") == event_type:
+                    return ev
+        return None
+
+    # --- Raw CameraEx Commands ---
+
+    def camera(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Call any whitelisted /api/camera/<action> endpoint."""
+        qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        path = f"/api/camera/{action}" + (f"?{qs}" if qs else "")
+        method = "GET" if action in ("capabilities", "getLensInfo", "getInhibitionInfo") else "POST"
+        return self._request_json(path, method=method)
+
+    def capabilities(self) -> Dict[str, Any]:
+        """Query CameraEx.LensInfo and all ParametersModifier is*Supported() flags."""
+        return self.camera("capabilities")
+
+    # --- Raw ParametersModifier Reflection Proxy ---
+
+    def modifier_list(self) -> Dict[str, Any]:
+        """List all available ParametersModifier methods and their signatures."""
+        return self._request_json("/api/modifier")
+
+    def modifier_get(self, method_name: str, *args: Any) -> Any:
+        """Invoke a ParametersModifier getter/query and return its `result`."""
+        qs = urllib.parse.urlencode({f"arg{i}": a for i, a in enumerate(args)})
+        path = f"/api/modifier/{method_name}" + (f"?{qs}" if qs else "")
+        return self._request_json(path).get("result")
+
+    def modifier_batch_get(self, *method_names: str) -> Dict[str, Any]:
+        """Read multiple parameterless ParametersModifier getters in a single IPC call."""
+        qs = urllib.parse.urlencode({"get": ",".join(method_names)})
+        return self._request_json(f"/api/modifier?{qs}").get("results", {})
+
+    def modifier_set(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        """Invoke a ParametersModifier setter."""
+        body: Dict[str, Any] = {"args": list(args)} if len(args) > 1 else {"v": args[0] if args else None}
+        return self._request_json(f"/api/modifier/{method_name}", method="POST", body=body)
+
+    def modifier_batch_set(self, **assignments: Any) -> Dict[str, Any]:
+        """Apply multiple ParametersModifier setters in one setParameters() call."""
+        return self._request_json("/api/modifier", method="POST", body=assignments)
+
+    # --- Raw android.hardware.Camera.Parameters ---
+
+    def params_get(self, key: Optional[str] = None) -> Any:
+        """Read all or a single key from Camera.Parameters."""
+        if key:
+            return self._request_json(f"/api/params/{urllib.parse.quote(key)}").get("value")
+        return self._request_json("/api/params").get("params", {})
+
+    def params_set(self, **updates: Any) -> Dict[str, Any]:
+        """Set raw key-value pairs on Camera.Parameters."""
+        return self._request_json("/api/params", method="POST", body=updates)
+
+    # --- LiveView & Photo Downloads ---
 
     def get_liveview_jpeg(self) -> bytes:
-        """Fetch the latest live-view preview frame as raw JPEG bytes."""
-        return self._request("/api/liveview.jpg", method="GET")
+        return self._request_bytes(f"/api/liveview.jpg?t={int(time.time() * 1000)}")
 
     def save_liveview(self, output_path: str) -> str:
-        """Fetch live-view JPEG and save it to disk."""
         data = self.get_liveview_jpeg()
         with open(output_path, "wb") as f:
             f.write(data)
         return output_path
 
-    def drive_focus(self, direction: str = "far", speed: int = 1) -> Dict[str, Any]:
-        """Drive focus one step in 'near' or 'far' direction at speed 1..4."""
-        qs = urllib.parse.urlencode({"dir": direction, "speed": int(speed)})
-        return self._json_request(f"/api/focus/drive?{qs}", method="POST")
-
-    def goto_focus(self, position: int, wait: bool = True, timeout: float = 15.0) -> Dict[str, Any]:
-        """Move focus to an absolute scale position."""
-        qs = urllib.parse.urlencode({"pos": int(position)})
-        res = self._json_request(f"/api/focus/goto?{qs}", method="POST")
-        if wait:
-            self.wait_until_idle(timeout=timeout)
-        return res
-
-    def start_bracket(
-        self, min_pos: int, max_pos: int, shots: int = 15, wait: bool = False, timeout: float = 300.0
-    ) -> Dict[str, Any]:
-        """Start automated focus bracketing from min_pos to max_pos."""
-        qs = urllib.parse.urlencode({"min": int(min_pos), "max": int(max_pos), "shots": int(shots)})
-        res = self._json_request(f"/api/bracket?{qs}", method="POST")
-        if wait:
-            self.wait_until_idle(timeout=timeout)
-        return res
-
-    def abort_bracket(self) -> Dict[str, Any]:
-        """Abort an active focus bracket sequence."""
-        return self._json_request("/api/bracket/abort", method="POST")
-
-    def capture(self, wait: bool = True, timeout: float = 15.0) -> Dict[str, Any]:
-        """Trigger a single shutter release."""
-        res = self._json_request("/api/capture", method="POST")
-        if wait:
-            self.wait_until_idle(timeout=timeout)
-        return res
-
-    def set_exposure(
-        self,
-        aperture: Optional[str] = None,
-        shutter: Optional[str] = None,
-        iso: Optional[int] = None,
-        iso_op: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Adjust aperture ('inc'/'dec'), shutter ('inc'/'dec'), ISO step ('iso_op'='inc'/'dec'), or ISO absolute value ('iso'=100)."""
-        params: Dict[str, Any] = {}
-        if aperture is not None:
-            params["aperture"] = aperture
-        if shutter is not None:
-            params["shutter"] = shutter
-        if iso is not None:
-            params["iso"] = int(iso)
-        if iso_op is not None:
-            params["isoOp"] = iso_op
-        qs = urllib.parse.urlencode(params)
-        return self._json_request(f"/api/exposure?{qs}", method="POST")
-
-    def zoom(
-        self,
-        direction: Optional[str] = None,
-        action: str = "step",
-        mag: Optional[int] = None,
-        magnify: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Control Power Zoom ('in'/'out'), Digital Zoom ('mag'=100..400), or MF Assist ('magnify'=0/100)."""
-        params: Dict[str, Any] = {}
-        if direction is not None:
-            params["dir"] = direction
-        if action is not None:
-            params["action"] = action
-        if mag is not None:
-            params["mag"] = int(mag)
-        if magnify is not None:
-            params["magnify"] = int(magnify)
-        qs = urllib.parse.urlencode(params)
-        return self._json_request(f"/api/zoom?{qs}", method="POST")
-
     def list_photos(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """List photos stored on the camera SD card (most recent first)."""
-        res = self._json_request(f"/api/photos?limit={int(limit)}", method="GET")
-        return res.get("photos", [])
+        return self._request_json(f"/api/photos?limit={limit}").get("photos", [])
 
-    def download_photo(self, path: Optional[str] = None, output_file: Optional[str] = None) -> str:
-        """Download a photo by path (or latest photo if path is None) to local disk."""
-        if path:
-            qs = urllib.parse.urlencode({"path": path})
-            endpoint = f"/api/photos/download?{qs}"
-            default_name = os.path.basename(path)
+    def download_photo(self, output_path: str, remote_path: Optional[str] = None) -> str:
+        if remote_path:
+            qs = urllib.parse.urlencode({"path": remote_path})
+            data = self._request_bytes(f"/api/photos/download?{qs}", timeout=30.0)
         else:
-            endpoint = "/api/photos/latest"
-            default_name = "latest_capture.jpg"
-
-        data = self._request(endpoint, method="GET")
-        dest = output_file if output_file else default_name
-        dest_dir = os.path.dirname(dest)
-        if dest_dir:
-            os.makedirs(dest_dir, exist_ok=True)
-        with open(dest, "wb") as f:
+            data = self._request_bytes("/api/photos/latest", timeout=30.0)
+        parent = os.path.dirname(os.path.abspath(output_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(output_path, "wb") as f:
             f.write(data)
-        return dest
+        return output_path
 
-    def capture_and_download(self, output_file: Optional[str] = None) -> str:
-        """Trigger capture and immediately download the resulting photo to PC."""
-        self.capture(wait=True)
-        # Small grace period for camera to flush JPEG buffer/storage
-        time.sleep(0.3)
-        return self.download_photo(output_file=output_file)
+    # --- High-Level Client-Side Helpers ---
 
-    def shoot_and_download_stack(
-        self, min_pos: int, max_pos: int, shots: int, output_dir: str
-    ) -> List[str]:
-        """Perform automated focus stack shooting and download all resulting pictures to output_dir."""
-        os.makedirs(output_dir, exist_ok=True)
-        before_photos = self.list_photos(limit=5)
-        before_names = set(p["name"] for p in before_photos)
+    def goto_focus(self, target_pos: int, timeout: float = 15.0) -> int:
+        """Move manual focus to `target_pos` using client-side closed-loop control."""
+        st = self.get_state()
+        focus = st.get("focus", {})
+        cur = int(focus.get("currentPosition", 0))
+        max_pos = int(focus.get("maxPosition", 0))
+        if max_pos > 0:
+            target_pos = max(0, min(max_pos, target_pos))
+        else:
+            target_pos = max(0, target_pos)
 
-        self.start_bracket(min_pos=min_pos, max_pos=max_pos, shots=shots, wait=True)
-        time.sleep(1.0)
+        if cur == target_pos:
+            return cur
 
-        after_photos = self.list_photos(limit=shots + 10)
-        new_photos = [p for p in after_photos if p["name"] not in before_names]
-        if not new_photos:
-            new_photos = after_photos[:shots]
+        seq = st.get("seq", 0)
+        # Try direct shiftFocusPosition first
+        delta = target_pos - cur
+        res = self.camera("shiftFocusPosition", n=delta)
+        if res.get("result") is True:
+            ev = self.wait_for_event("FocusDrive", since=seq, timeout=2.0)
+            if ev:
+                cur = int(ev.get("data", {}).get("currentPosition", cur))
+                if cur == target_pos:
+                    return cur
 
-        downloaded_paths = []
-        for p in reversed(new_photos):
-            save_path = os.path.join(output_dir, p["name"])
-            self.download_photo(path=p["path"], output_file=save_path)
-            downloaded_paths.append(save_path)
-        return downloaded_paths
-
-    def wait_until_idle(self, timeout: float = 60.0, poll_interval: float = 0.2) -> Dict[str, Any]:
-        """Poll /api/status until camera state returns to 'idle'."""
+        # Closed-loop fallback via startOneShotFocusDrive
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            st = self.get_status()
-            if st.get("state") == "idle":
-                return st
-            if st.get("state") == "error":
-                raise RuntimeError(f"Camera entered error state: {st}")
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Timed out waiting for camera idle after {timeout}s")
+        stalled = 0
+        while cur != target_pos and time.time() < deadline and stalled < 10:
+            diff = target_pos - cur
+            direction = self.FOCUS_FAR if diff > 0 else self.FOCUS_NEAR
+            abs_d = abs(diff)
+            speed = 4 if abs_d > 25 else 3 if abs_d > 15 else 2 if abs_d > 6 else 1
+            self.camera("startOneShotFocusDrive", dir=direction, speed=speed)
+            ev = self.wait_for_event("FocusDrive", since=seq, timeout=1.0)
+            if ev:
+                seq = ev.get("seq", seq)
+                new_pos = int(ev.get("data", {}).get("currentPosition", cur))
+                if new_pos == cur:
+                    stalled += 1
+                else:
+                    stalled = 0
+                cur = new_pos
+            else:
+                stalled += 1
+        return cur
 
+    def capture_and_download(
+        self,
+        output_path: Optional[str] = None,
+        timeout: float = 15.0,
+    ) -> str:
+        """Trigger capture, wait for StoreImageComplete event, and download the photo."""
+        seq = self.get_state().get("seq", 0)
+        self.camera("burstableTakePicture")
+        ev = self.wait_for_event("StoreImageComplete", since=seq, timeout=timeout)
+        remote_path = None
+        filename = f"photo_{int(time.time())}.jpg"
+        if ev:
+            data = ev.get("data", {})
+            dir_name = data.get("DirectoryName")
+            file_name = data.get("FileName")
+            if file_name:
+                filename = file_name
+            if dir_name and file_name:
+                # Try locating matching SD card path from /api/photos
+                for p in self.list_photos(limit=10):
+                    if p.get("name") == file_name:
+                        remote_path = p.get("path")
+                        break
+        target = output_path or filename
+        return self.download_photo(target, remote_path=remote_path)
 
-A6000MacroClient = SonyPmcaClient
+    def focus_stack(
+        self,
+        min_pos: int,
+        max_pos: int,
+        shots: int,
+        save_dir: Optional[str] = None,
+    ) -> List[str]:
+        """Execute a client-side focus bracket sequence and optionally download each shot."""
+        if shots < 1:
+            return []
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+        positions = (
+            [min_pos]
+            if shots == 1
+            else [round(min_pos + (max_pos - min_pos) * i / (shots - 1)) for i in range(shots)]
+        )
+        saved_files: List[str] = []
+        for idx, pos in enumerate(positions, 1):
+            actual = self.goto_focus(pos)
+            if save_dir:
+                out_file = os.path.join(save_dir, f"stack_{idx:03d}_focus_{actual}.jpg")
+                self.capture_and_download(out_file)
+                saved_files.append(out_file)
+            else:
+                seq = self.get_state().get("seq", 0)
+                self.camera("burstableTakePicture")
+                self.wait_for_event("Shutter", since=seq, timeout=15.0)
+        return saved_files
