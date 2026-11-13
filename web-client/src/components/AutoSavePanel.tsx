@@ -39,8 +39,12 @@ export function AutoSavePanel({
 
       <div className="autosave-row">
         {pickerSupported ? (
-          <button type="button" className="btn btn-sm" onClick={onPickDirectory}>
-            {dirName ? `Folder: ${dirName}` : 'Choose Local Folder'}
+          <button
+            type="button"
+            className={`btn btn-sm ${enabled && !dirName ? 'btn-primary' : ''}`}
+            onClick={onPickDirectory}
+          >
+            {dirName ? `Folder: ${dirName}` : enabled ? 'Select Folder to Save' : 'Choose Local Folder'}
           </button>
         ) : (
           <span className="muted-tag">

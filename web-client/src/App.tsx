@@ -31,7 +31,13 @@ export function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>('control');
 
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('pmca_autosave_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [saveDirName, setSaveDirName] = useState<string | null>(null);
   const [savedCount, setSavedCount] = useState<number>(0);
   const [lastSavedFile, setLastSavedFile] = useState<string | null>(null);
@@ -55,12 +61,54 @@ export function App() {
     }
   }, [client]);
 
+  const handledFilesRef = useRef<Set<string>>(new Set());
+  const pendingJpegTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Array<{ name: string; url: string }>>([]);
+  const isProcessingQueueRef = useRef<boolean>(false);
+
+  const processSaveQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current) return;
+    isProcessingQueueRef.current = true;
+    while (saveQueueRef.current.length > 0) {
+      const task = saveQueueRef.current.shift();
+      if (!task) break;
+      setSavingStatus(`Saving ${task.name}...`);
+      try {
+        const res = await fetch(task.url);
+        if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (dirHandleRef.current) {
+          await saveBlobToDirectory(dirHandleRef.current, task.name, blob);
+        } else {
+          triggerBrowserDownload(task.name, blob);
+        }
+        setSavedCount((c) => c + 1);
+        setLastSavedFile(task.name);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      }
+    }
+    setSavingStatus(null);
+    isProcessingQueueRef.current = false;
+  }, []);
+
+  const queueSavePhoto = useCallback(
+    (task: { name: string; url: string }) => {
+      saveQueueRef.current.push(task);
+      void processSaveQueue();
+    },
+    [processSaveQueue],
+  );
+
   const handlePickDirectory = useCallback(async () => {
     try {
       const handle = await pickSaveDirectory();
       dirHandleRef.current = handle;
       setSaveDirName(handle.name);
       setAutoSaveEnabled(true);
+      try {
+        localStorage.setItem('pmca_autosave_enabled', 'true');
+      } catch {}
       setErrorMsg(null);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -68,53 +116,61 @@ export function App() {
     }
   }, []);
 
-  const saveCapturedPhoto = useCallback(
-    async (ev: CameraEvent) => {
+  const handleCaptureEvent = useCallback(
+    (ev: CameraEvent) => {
       if (!autoSaveRef.current) return;
-      const dirName = typeof ev.data?.DirectoryName === 'string' ? ev.data.DirectoryName : '';
-      const rawFileName = typeof ev.data?.FileName === 'string' ? ev.data.FileName : '';
-      const baseName = rawFileName.replace(/\.[^.]+$/, '');
 
-      setSavingStatus('Downloading captured photo...');
-      try {
-        const targets: Array<{ name: string; url: string }> = [];
-        if (dirName && baseName) {
-          const listing = await client.listPhotos(dirName, 100);
-          for (const p of listing.photos ?? []) {
-            if (p.name.startsWith(baseName)) {
-              targets.push({ name: p.name, url: client.photoDownloadUrl(p.path) });
-            }
-          }
+      if (ev.type === 'StoreImageComplete') {
+        // SD card write completed - cancel fallback timer if any
+        if (pendingJpegTimerRef.current !== null) {
+          window.clearTimeout(pendingJpegTimerRef.current);
+          pendingJpegTimerRef.current = null;
         }
-        if (targets.length === 0) {
-          const now = new Date();
-          const pad = (n: number) => String(n).padStart(2, '0');
-          const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-          targets.push({
-            name: rawFileName || `DSC_${stamp}_${ev.seq}.jpg`,
+
+        const dirName = typeof ev.data?.DirectoryName === 'string' ? ev.data.DirectoryName : '';
+        const rawFileName = typeof ev.data?.FileName === 'string' ? ev.data.FileName : '';
+        if (rawFileName) {
+          if (handledFilesRef.current.has(rawFileName)) return;
+          handledFilesRef.current.add(rawFileName);
+
+          // Direct path avoids slow SD directory scan (which stalls on cards with thousands of files)
+          const filePath = dirName ? `/mnt/sdcard/DCIM/${dirName}/${rawFileName}` : rawFileName;
+          queueSavePhoto({
+            name: rawFileName,
+            url: client.photoDownloadUrl(filePath),
+          });
+        } else {
+          // StoreImageComplete without filename fallback
+          const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+          const name = `DSC_${stamp}_${ev.seq}.jpg`;
+          if (handledFilesRef.current.has(name)) return;
+          handledFilesRef.current.add(name);
+          queueSavePhoto({
+            name,
             url: client.latestPhotoUrl(Date.now()),
           });
         }
-
-        for (const t of targets) {
-          const res = await fetch(t.url);
-          if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-          const blob = await res.blob();
-          if (dirHandleRef.current) {
-            await saveBlobToDirectory(dirHandleRef.current, t.name, blob);
-          } else {
-            triggerBrowserDownload(t.name, blob);
-          }
-          setSavedCount((c) => c + 1);
-          setLastSavedFile(t.name);
+      } else if (ev.type === 'Jpeg') {
+        // Memory capture event arrives before StoreImageComplete.
+        // Buffer for 1.2s: if StoreImageComplete arrives, it cancels this timer and saves the high-res file.
+        // If not (e.g. shooting without SD card), saves the in-memory JPEG frame.
+        if (pendingJpegTimerRef.current !== null) {
+          window.clearTimeout(pendingJpegTimerRef.current);
         }
-        setSavingStatus(null);
-      } catch (err) {
-        setSavingStatus(null);
-        setErrorMsg(err instanceof Error ? err.message : String(err));
+        pendingJpegTimerRef.current = window.setTimeout(() => {
+          pendingJpegTimerRef.current = null;
+          const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+          const name = `capture_${stamp}_${ev.seq}.jpg`;
+          if (handledFilesRef.current.has(name)) return;
+          handledFilesRef.current.add(name);
+          queueSavePhoto({
+            name,
+            url: client.latestPhotoUrl(Date.now()),
+          });
+        }, 1200);
       }
     },
-    [client],
+    [client, queueSavePhoto],
   );
 
   // Initial state fetch + long-polling /api/events
@@ -136,7 +192,7 @@ export function App() {
             setEvents((prev) => [...res.events.slice().reverse(), ...prev].slice(0, 30));
             for (const ev of res.events) {
               if (ev.type === 'Jpeg' || ev.type === 'StoreImageComplete') {
-                void saveCapturedPhoto(ev);
+                handleCaptureEvent(ev);
               }
             }
             const s = await client.getState();
@@ -158,7 +214,7 @@ export function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [client, refreshState, saveCapturedPhoto]);
+  }, [client, handleCaptureEvent, refreshState]);
 
   const handleConnectSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -276,6 +332,9 @@ export function App() {
                     void handlePickDirectory();
                   } else {
                     setAutoSaveEnabled(next);
+                    try {
+                      localStorage.setItem('pmca_autosave_enabled', String(next));
+                    } catch {}
                   }
                 }}
                 dirName={saveDirName}
