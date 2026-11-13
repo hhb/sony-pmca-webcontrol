@@ -54,7 +54,7 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
 |                  Web Client (web-client/, React + TS)                 |
 |  - CameraClient SDK (src/api/cameraClient.ts)                         |
 |  - LiveViewPanel (MJPEG parser, Peaking, Histogram, 2x-4x Focus Loupe)|
-|  - FocusControl (Client-side closed-loop gotoFocus & focus stacking)  |
+|  - FocusControl (Device-side closed-loop gotoFocus & focus stacking)  |
 |  - ExposureControl, PhotoBrowser, AutoSavePanel, RpcInspector         |
 +-----------------------------------------------------------------------+
 ```
@@ -65,10 +65,11 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
 * `NanoHTTPD` processes incoming HTTP requests on background worker threads, whereas `CameraEx` hardware mutations must run on the Android main UI thread. `MacroServerActivity.runOnMainSync()` marshals all `/api/call` invocations onto the main `Handler` with a `3000 ms` timeout (`504 Gateway Timeout` on firmware stall).
 * `LiveViewManager` separates `m_captureLock` (guarding `CameraSequence.getPreviewSequenceFrames(1)` and `ByteBuffer` reads) from `m_frameLock` (guarding `m_latestJpeg`, `m_frameSeq`, and `notifyAll()`). This ensures hardware frame reads never block `onPause()`/`surfaceDestroyed()` or HTTP snapshot readers.
 
-### 4.2 Client-Side Closed-Loop Focus Positioning
-* Because `CameraEx.shiftFocusPosition()` blocks/hangs on bodies like `ILCE-6000`, `CameraClient.gotoFocus()` implements closed-loop positioning in `web-client/src/api/cameraClient.ts`:
-  * Reads `focus.currentPosition` from `/api/state`, computes `diff = targetPos - current`, selects adaptive speed (`1..4`) for `startOneShotFocusDrive(direction, speed)`, and iterates until `|diff| <= tolerance`.
-* `CameraClient.runFocusStack()` interpolates `N` targets between `Start A` and `End B`, drives to each target, waits `settleMs`, triggers `burstableTakePicture()`, and supports instant cancellation via `AbortController`.
+### 4.2 Device-Side Event-Driven Closed-Loop Control (`CameraGoalController`)
+* Because `CameraEx` does not expose absolute setters for focus (`shiftFocusPosition()` hangs on `ILCE-6000`), aperture, shutter speed, or optical zoom, `CameraGoalController.java` implements event-driven closed-loop positioning on the camera under `target: "highlevel"`:
+  * **Zero UI Blocking**: Waiting for hardware listener callbacks (`FocusDrive`, `ApertureChange`, `ShutterSpeedChange`, `ZoomChange`) runs on the calling HTTP worker thread, while each single drive step is dispatched briefly to the main thread via `runOnMainSync`.
+  * **Per-Parameter Isolation & Latest-Wins Preemption**: Focus, aperture, shutter, and zoom run in independent `GoalSlot`s so different parameters execute in parallel, while a newer target for the same parameter increments `generationId` and immediately supersedes any in-flight request (`superseded: true`).
+* `CameraClient.runFocusStack()` interpolates `N` targets between `Start A` and `End B`, calls `gotoFocus()` (`highlevel.setFocusPosition`), waits `settleMs`, triggers `burstableTakePicture()`, and supports instant cancellation via `AbortController`.
 
 ### 4.3 LiveView Canvas Processing & Auto-Save
 * `LiveViewPanel.tsx` reads the `/api/liveview.mjpeg` byte stream via `fetch()` + `ReadableStream`, decoding only the newest frame (zero backlog) onto `<canvas>` with optional real-time client-side **Focus Peaking**, **Luma Histogram**, **Rule-of-Thirds Grid**, and a **2x–4x Click-to-Magnify Focus Loupe**.
