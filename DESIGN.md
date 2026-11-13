@@ -1,23 +1,23 @@
-# Sony a6000 AI Macro System — 系统设计文档 (`DESIGN.md`)
+# Sony a6000 AI Macro System — Architecture & Design (`DESIGN.md`)
 
-## 1. 背景与核心问题
+## 1. Background & Stock Firmware Limitations
 
-Sony a6000（ILCE-6000）原厂固件在微距自动化与 AI 联机工作流中存在三个官方限制：
-1. **USB 联机（PC Remote）无实时画面，也无焦点驱动接口**：`Imaging Edge Desktop` 连接 a6000 仅支持改曝光参数、按快门和传图，不传输 Live View 视频流，也不提供手动对焦（MF）步进按钮。
-2. **Wi-Fi 遥控（Smart Remote Control）无远程 MF 接口**：官方 Wi-Fi JSON-RPC 接口只开放了 `Touch AF`（点击自动对焦），没有开放驱动镜头马达微调步进的接口；且必须让控制端断开外网去连相机热点。
-3. **无原生机内景深包围（Focus Bracketing）**：拍 1–5cm 矿石微距时景深极浅，原厂固件无法自动从前到后步进拍多张照片用于景深合成（Focus Stacking）。
+The stock Sony a6000 (`ILCE-6000`) firmware imposes three major limitations for macro photography and automated AI workflows:
+1. **No Live View or Focus Drive over USB (`PC Remote`)**: Connecting the a6000 to Sony `Imaging Edge Desktop` via USB only allows blind shutter triggering and exposure changes. It does not stream a Live View feed or expose manual focus (MF) stepping controls.
+2. **No Remote MF Stepping over Wi-Fi (`Smart Remote Control`)**: Sony's official Wi-Fi JSON-RPC API only exposes `Touch AF` (autofocus at coordinates) and omits fine-grained manual focus drive commands. It also forces the host computer/tablet to join the camera's isolated Wi-Fi access point.
+3. **No Native Focus Bracketing**: Shooting 1–5 cm mineral specimens requires stacking dozens of shots due to razor-thin depth of field, which the stock a6000 firmware cannot automate.
 
-## 2. 突破原理：机内 Android 子系统与 `CameraEx`
+## 2. Core Mechanism: In-Camera Android Subsystem & `CameraEx`
 
-Sony a6000 机身内部运行着一个基于 **Android 2.3.3（API Level 10）** 的子系统，用于承载 PlayMemories 机内应用。通过开源社区的 `OpenMemories-Framework` 和 `PMCA-RE` 工具链，我们可以将自定义 `.apk` 直接安装到相机内部，从而绕过官方外部协议的阉割，直接调用索尼未公开的底层硬件类 `com.sony.scalar.hardware.CameraEx`：
+Internally, the Sony a6000 runs an embedded **Android 2.3.3 (API Level 10)** subsystem that hosts PlayMemories Camera Apps. By leveraging the open-source `OpenMemories-Framework` and `PMCA-RE` toolchain, we can run a custom Android `.apk` directly inside the camera and invoke Sony's undocumented hardware layer (`com.sony.scalar.hardware.CameraEx`):
 
-* **电动对焦步进控制**：`CameraEx.startOneShotFocusDrive(direction, speed)`（支持 `NEAR` / `FAR` 两个方向与 `1..4` 四档速度）。
-* **绝对焦点刻度读取**：`CameraEx.FocusDriveListener` 回调返回 `FocusPosition(currentPosition, maxPosition)`，可实现闭环定位到任意整数刻度。
-* **曝光与快门控制**：`CameraEx.incrementAperture()` / `decrementAperture()`、`incrementShutterSpeed()` / `decrementShutterSpeed()`、`ParametersModifier.setISOSensitivity()`、`burstableTakePicture()`。
-* **实时画面采集**：通过标准 Android `Camera.PreviewCallback` 捕获 YUV（NV21）预览帧，在有 HTTP 请求时通过 `android.graphics.YuvImage` 按需压缩为 JPEG 字节流。
-* **局域网接入**：调用 `WifiManager` 连接相机中已保存的家庭路由器 Wi-Fi，使相机成为局域网内的独立节点，并在机内嵌入 `NanoHTTPD`（端口 `8080`）对外暴露 RESTful HTTP 接口与内置 Web 控制面板。
+* **Motorized Focus Stepping**: `CameraEx.startOneShotFocusDrive(direction, speed)` drives the lens focus motor in `NEAR` or `FAR` directions across 4 speed levels (`1..4`).
+* **Absolute Focus Scale Readback**: `CameraEx.FocusDriveListener` reports `FocusPosition(currentPosition, maxPosition)`, enabling closed-loop positioning to any integer focus coordinate.
+* **Exposure & Shutter Control**: `CameraEx.incrementAperture()` / `decrementAperture()`, `incrementShutterSpeed()` / `decrementShutterSpeed()`, `ParametersModifier.setISOSensitivity()`, and `burstableTakePicture()`.
+* **Live View Capture**: Standard Android `Camera.PreviewCallback` captures raw YUV (`NV21`) preview frames, which are compressed on-demand into JPEG streams via `android.graphics.YuvImage` when requested over HTTP.
+* **LAN Web Server**: `WifiManager` connects the camera directly to a saved home/studio Wi-Fi router, while an embedded `NanoHTTPD` server (port `8080`) exposes a RESTful HTTP API and a responsive HTML5 control panel.
 
-## 3. 系统架构
+## 3. System Architecture
 
 ```text
 +-------------------------------------------------------------------+
@@ -25,48 +25,48 @@ Sony a6000 机身内部运行着一个基于 **Android 2.3.3（API Level 10）**
 |                                                                   |
 |  +-----------------------+      +------------------------------+  |
 |  |  MacroServerActivity  |<---->|  com.sony.scalar.CameraEx    |  |
-|  |  - 状态机 (State)      |      |  - FocusDriveListener        |  |
-|  |  - 对焦队列 (Queue)    |      |  - startOneShotFocusDrive()  |  |
-|  |  - YUV 帧缓冲 (Lock)   |      |  - burstableTakePicture()    |  |
+|  |  - State Machine      |      |  - FocusDriveListener        |  |
+|  |  - Focus Queue        |      |  - startOneShotFocusDrive()  |  |
+|  |  - YUV Frame Buffer   |      |  - burstableTakePicture()    |  |
 |  +-----------+-----------+      |  - PreviewCallback (YUV)     |  |
 |              ^                  +------------------------------+  |
-|              | UI Handler / 线程安全调用                           |
+|              | UI Handler / Thread-Safe Dispatch                  |
 |              v                                                    |
 |  +-----------------------+                                        |
 |  |    MacroHttpServer    |  (NanoHTTPD on :8080, CORS enabled)    |
-|  |  - GET  /             | -> 内置 HTML5 Web UI (Mac/iPad Safari) |
-|  |  - GET  /api/status   | -> JSON 状态与焦点刻度                  |
-|  |  - GET  /api/liveview.jpg -> 实时预览帧 (YuvImage -> JPEG)     |
-|  |  - POST /api/focus/*  | -> 步进微调 / 闭环跳转到指定刻度         |
-|  |  - POST /api/bracket  | -> 机内全自动景深包围连拍               |
-|  |  - POST /api/exposure | -> 光圈 / 快门 / ISO 调整               |
-|  |  - POST /api/capture  | -> 单张拍摄                            |
+|  |  - GET  /             | -> Built-in HTML5 Web UI (Mac/iPad)    |
+|  |  - GET  /api/status   | -> JSON state & focus coordinates      |
+|  |  - GET  /api/liveview.jpg -> On-demand YUV-to-JPEG frame       |
+|  |  - POST /api/focus/*  | -> Single step / closed-loop goto      |
+|  |  - POST /api/bracket  | -> Automated focus bracketing loop     |
+|  |  - POST /api/exposure | -> Aperture / Shutter / ISO control    |
+|  |  - POST /api/capture  | -> Single shutter release              |
 |  +-----------+-----------+                                        |
 +--------------|----------------------------------------------------+
-               |  家庭 Wi-Fi 局域网 (HTTP / JSON / JPEG)
+               |  Local Wi-Fi Network (HTTP / JSON / JPEG)
                v
 +-------------------------------------------------------------------+
-|            控制端：Mac / iPad 浏览器  或  AI Agent (Python)         |
-|  - client/a6000_client.py      (零第三方依赖 HTTP SDK)             |
-|  - client/example_ai_macro.py  (高光过曝检测 + 清晰度扫边 + 自动堆栈)|
+|          Controller: Mac / iPad Browser  or  AI Agent (Python)    |
+|  - client/a6000_client.py      (Zero-dependency Python HTTP SDK)  |
+|  - client/example_ai_macro.py  (Highlight check + sweep + stack)  |
 +-------------------------------------------------------------------+
 ```
 
-## 4. 核心模块设计
+## 4. Detailed Module Design
 
-### 4.1 线程模型与按需压缩
-* `NanoHTTPD` 在后台工作线程处理 HTTP 请求，而 `CameraEx` 与 UI 控件必须在 Android 主线程（UI Thread）操作。`MacroServerActivity` 通过 `Handler.post()` 将所有硬件指令派发回主线程执行。
-* 相机以较高帧率触发 `onPreviewFrame(byte[] data, Camera camera)`。为避免 CPU 过热和无效开销，回调中仅在互斥锁 `m_frameLock` 下执行一次极轻量的内存拷贝保存最新 YUV 原始字节；只有当外部真正请求 `GET /api/liveview.jpg` 时，才执行 `YuvImage.compressToJpeg(..., 75, baos)` 编码输出。
+### 4.1 Threading Model & On-Demand JPEG Compression
+* `NanoHTTPD` processes incoming HTTP requests on background worker threads, whereas `CameraEx` hardware mutations and UI updates must run on the Android main UI thread. `MacroServerActivity` marshals all camera commands onto the main thread via `Handler.post()`.
+* `onPreviewFrame(byte[] data, Camera camera)` fires continuously at the camera's preview frame rate. To prevent CPU overheating on the camera's processor, the callback only copies the raw YUV byte array under a mutex lock (`m_frameLock`). Actual `YuvImage.compressToJpeg(..., 75, baos)` encoding is executed lazily only when a client requests `GET /api/liveview.jpg`.
 
-### 4.2 焦点闭环定位与卡顿兜底
-* `FocusBracket` 实测经验表明，调用 `startOneShotFocusDrive()` 后偶尔不会触发 `FocusDriveListener`。因此在每次驱动后挂载一个 `60ms` 延迟检查任务 `m_checkFocusRunnable`；若焦点未变化则重试，连续 8 次无变化则判定为到达镜头物理极限或卡顿，安全回退到 `idle`（或继续拍摄），防止死锁。
+### 4.2 Closed-Loop Focus Positioning & Stall Recovery
+* On Sony Scalar firmware, `startOneShotFocusDrive()` occasionally fails to fire `FocusDriveListener` for tiny steps. Every drive command schedules a `60ms` watchdog runnable (`m_checkFocusRunnable`). If the position has not changed, it retries up to 8 times before safely declaring a physical lens limit/stall and returning to `idle` (or advancing the bracket queue), preventing deadlocks.
 
-### 4.3 景深包围（Focus Bracketing）状态机
-* 状态枚举：`idle` → `focusing` / `capturing` / `bracketing` / `error`。
-* 接收到 `POST /api/bracket?min=A&max=B&shots=N` 后，在 `[min, max]` 之间线性插值生成去重后的目标焦点队列 `m_focusQueue`。
-* 循环流程：`driveTowardTarget()` 驱动到队首刻度 → 触发 `burstableTakePicture()` → `onShutter()` 回调确认拍摄成功 → `cancelTakePicture()` 释放快门锁并弹出队首 → 驱动到下一个焦点，直至队列清空。
+### 4.3 Focus Bracketing State Machine
+* States: `idle`, `focusing`, `capturing`, `bracketing`, `error`.
+* Upon receiving `POST /api/bracket?min=A&max=B&shots=N`, the activity interpolates `N` deduplicated integer focus coordinates between `min` and `max` into `m_focusQueue`.
+* Execution loop: `driveTowardTarget()` moves to the head of `m_focusQueue` → triggers `burstableTakePicture()` → `onShutter()` callback confirms capture completion → `cancelTakePicture()` releases the shutter lock and pops the queue → advances to the next focus target until `m_focusQueue` is empty.
 
-## 5. 物理与硬件前提
-1. **镜头要求**：远程调焦和自动景深包围依赖相机通过卡口触点向镜头内部马达发送指令，因此**必须使用带有电子触点与自动对焦（AF）马达的镜头**（或“索尼 AF 镜头 + 带电子触点近摄接圈”）。纯手动机械镜头（如老蛙 65mm 2X）无法响应马达指令，但仍可使用本系统的实时画面、曝光调整和远程快门功能。
-2. **机身状态**：运行时通过 `setAutoPowerOffMode(false)` 禁用自动关机，建议搭配 NP-FW50 USB 假电池供电。
-3. **文件存储**：RAW（ARW）单张约 24MB，受限于 a6000 的 2.4GHz Wi-Fi 带宽，堆栈连拍默认高速写入机身 SD 卡，拍完后在电脑端进行合成（如 Helicon Focus / Zerene Stacker）。
+## 5. Hardware & Operational Constraints
+1. **AF Lens Requirement**: Software focus control relies on electronic commands sent to the lens focus motor. **An E-mount lens with electronic contacts and an AF motor is required** (including standard AF lenses mounted on electronic AF macro extension tubes). Purely mechanical manual lenses (e.g., Laowa 65mm 2X) cannot be focused electronically, though live view, exposure adjustments, and shutter release still work.
+2. **Power Management**: The app calls `setAutoPowerOffMode(false)` while active so the camera never sleeps mid-session. Using an NP-FW50 USB dummy battery is recommended for long studio sessions.
+3. **Storage Workflow**: Because 24MP RAW (`.ARW`) files are ~24MB each and the a6000 uses 2.4GHz Wi-Fi, bracketed sequences are written directly to the internal SD card at full speed for later stacking in Helicon Focus or Zerene Stacker.

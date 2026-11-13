@@ -1,25 +1,25 @@
 # Sony a6000 AI Macro System
 
-将 Sony a6000（ILCE-6000）改造成支持 **Wi-Fi 局域网实时取景、浏览器远程微调 MF、机内自动景深包围（Focus Bracketing）与 AI HTTP REST API 控制** 的微距摄影工作站。
+Turn a Sony a6000 (`ILCE-6000`) into a network-connected macro photography workstation with **Wi-Fi LAN Live View, browser-based remote Manual Focus (MF) stepping, in-camera Focus Bracketing, and an AI-ready HTTP REST API**.
 
-## 核心功能
+## Key Features
 
-* **局域网直连，无需切换热点**：相机直接连入家庭/工作室 Wi-Fi，在屏幕上显示局域网 IP（端口 `8080`）。
-* **内置 Web 控制面板**：Mac / iPad 浏览器打开 `http://<相机IP>:8080` 即可看实时画面、微调对焦（`<<<` `<<` `<` `>` `>>` `>>>`）、调整光圈/快门/ISO、一键执行景深包围。
-* **AI 友好 HTTP REST API & Python SDK**：提供 `/api/status`、`/api/liveview.jpg`、`/api/focus/drive`、`/api/focus/goto`、`/api/bracket`、`/api/exposure`、`/api/capture` 等标准接口，及零依赖 Python 客户端。
-* **GitHub Actions 自动编译**：推送后自动在云端编译生成可刷入相机的 `.apk`。
+* **Direct Home Wi-Fi Connection**: Connects directly to your existing Wi-Fi router (no need to disconnect your Mac or iPad from the internet to join an ad-hoc camera hotspot) and displays its LAN IP address on the camera screen (port `8080`).
+* **Built-in Web Control UI**: Open `http://<camera-ip>:8080` in Safari/Chrome on Mac or iPad to view live preview frames, step manual focus (`<<<` `<<` `<` `>` `>>` `>>>`), adjust aperture/shutter/ISO, and run automated focus bracketing stacks.
+* **AI-Friendly HTTP REST API & Python SDK**: Clean JSON/JPEG endpoints (`/api/status`, `/api/liveview.jpg`, `/api/focus/drive`, `/api/focus/goto`, `/api/bracket`, `/api/exposure`, `/api/capture`) plus a zero-dependency Python client (`client/a6000_client.py`).
+* **Automated GitHub Actions Build**: Automatically compiles the camera `.apk` in the cloud on every push.
 
-## 文档导航
+## Documentation
 
-* **系统架构与设计原理**：[DESIGN.md](./DESIGN.md)
-* **编译、刷机、API 手册与 AI Agent 使用指南**：[USAGE.md](./USAGE.md)
+* **System Architecture & Technical Design**: [DESIGN.md](./DESIGN.md)
+* **Build, Flashing, API Reference & AI Agent Guide**: [USAGE.md](./USAGE.md)
 
-## 目录结构
+## Repository Structure
 
-* `camera-app/` — 运行在 Sony a6000 机内 Android 2.3 子系统的 APK 源码（基于 `OpenMemories-Framework` 与 `NanoHTTPD`）
-* `client/` — Python 控制端 SDK (`a6000_client.py`) 与自动曝光/扫焦堆栈示例 (`example_ai_macro.py`)
-* `.github/workflows/build.yml` — GitHub Actions 自动编译 APK 工作流
+* `camera-app/` — Android 2.3 (API 10) in-camera APK source built on `OpenMemories-Framework` and `NanoHTTPD`
+* `client/` — Python client SDK (`a6000_client.py`) and automated AI macro focus-stacking script (`example_ai_macro.py`)
+* `.github/workflows/build.yml` — GitHub Actions workflow to build the `.apk` artifact
 
-## 硬件前提
+## Hardware Requirement
 
-* 远程调焦与自动景深包围需搭配**带电子触点与自动对焦（AF）马达的 E 卡口镜头**（或“索尼 AF 镜头 + 带电子触点近摄接圈”）。纯手动机械镜头仍可使用实时取景、曝光调节和远程快门功能。
+* Remote focus stepping and automated focus bracketing require an **E-mount lens with electronic contacts and an autofocus (AF) motor** (or a Sony AF lens paired with electronic AF macro extension tubes). Fully mechanical manual lenses can still use live view, exposure control, and remote shutter release.
