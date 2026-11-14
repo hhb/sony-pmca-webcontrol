@@ -53,6 +53,13 @@ export function LiveViewPanel({
     } catch {}
     return 0;
   });
+  const [rotationDeg, setRotationDeg] = useState<0 | 90 | 180 | 270>(() => {
+    try {
+      const saved = Number(localStorage.getItem('pmca_lv_rotation'));
+      if (saved === 0 || saved === 90 || saved === 180 || saved === 270) return saved;
+    } catch {}
+    return 0;
+  });
 
   const [fps, setFps] = useState<number>(0);
   const [frameError, setFrameError] = useState<string | null>(null);
@@ -126,6 +133,21 @@ export function LiveViewPanel({
   peakingRef.current = peaking;
   const showHistogramRef = useRef(showHistogram);
   showHistogramRef.current = showHistogram;
+  const rotationRef = useRef<0 | 90 | 180 | 270>(rotationDeg);
+  rotationRef.current = rotationDeg;
+
+  const rotateBy = (delta: 90 | 270) => {
+    setRotationDeg((prev) => {
+      const next = ((prev + delta) % 360) as 0 | 90 | 180 | 270;
+      try {
+        localStorage.setItem('pmca_lv_rotation', String(next));
+      } catch {}
+      return next;
+    });
+    clearAfTimer();
+    setAfStatus('idle');
+    setFocusPoint(null);
+  };
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -174,14 +196,27 @@ export function LiveViewPanel({
 
           const canvas = canvasRef.current;
           if (canvas) {
-            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-              canvas.width = bitmap.width || 640;
-              canvas.height = bitmap.height || 480;
+            const deg = rotationRef.current;
+            const srcW = bitmap.width || 640;
+            const srcH = bitmap.height || 480;
+            const targetW = deg % 180 !== 0 ? srcH : srcW;
+            const targetH = deg % 180 !== 0 ? srcW : srcH;
+            if (canvas.width !== targetW || canvas.height !== targetH) {
+              canvas.width = targetW;
+              canvas.height = targetH;
             }
             const needPixels = peakingRef.current || showHistogramRef.current;
             const ctx = canvas.getContext('2d', { willReadFrequently: needPixels });
             if (ctx) {
-              ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+              if (deg === 0) {
+                ctx.drawImage(bitmap, 0, 0, srcW, srcH);
+              } else {
+                ctx.save();
+                ctx.translate(targetW / 2, targetH / 2);
+                ctx.rotate((deg * Math.PI) / 180);
+                ctx.drawImage(bitmap, -srcW / 2, -srcH / 2, srcW, srcH);
+                ctx.restore();
+              }
 
               if (needPixels) {
                 const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -344,10 +379,23 @@ export function LiveViewPanel({
       return;
     }
 
-    const normX = relX / renderWidth;
-    const normY = relY / renderHeight;
-    const clickX = Math.round(normX * canvas.width);
-    const clickY = Math.round(normY * canvas.height);
+    const dispX = relX / renderWidth;
+    const dispY = relY / renderHeight;
+    const clickX = Math.round(dispX * canvas.width);
+    const clickY = Math.round(dispY * canvas.height);
+
+    let normX = dispX;
+    let normY = dispY;
+    if (rotationDeg === 90) {
+      normX = dispY;
+      normY = 1 - dispX;
+    } else if (rotationDeg === 180) {
+      normX = 1 - dispX;
+      normY = 1 - dispY;
+    } else if (rotationDeg === 270) {
+      normX = 1 - dispY;
+      normY = dispX;
+    }
 
     if (toolMode === 'focus') {
       clearAfTimer();
@@ -421,10 +469,30 @@ export function LiveViewPanel({
           >
             Hist
           </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => rotateBy(270)}
+            title="Rotate Left 90°"
+          >
+            ↺
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => rotateBy(90)}
+            title="Rotate Right 90°"
+          >
+            ↻
+          </button>
+          {rotationDeg !== 0 && <span className="badge">{rotationDeg}°</span>}
         </div>
       </div>
 
-      <div className="liveview-stage">
+      <div
+        className="liveview-stage"
+        style={rotationDeg % 180 !== 0 ? { aspectRatio: '2 / 3' } : undefined}
+      >
         <canvas
           ref={canvasRef}
           className="liveview-canvas"
