@@ -184,6 +184,7 @@ public class RpcDispatcher {
             if (matchesTarget(targetFilter, "highlevel")) {
                 JSONArray arr = new JSONArray();
                 addSyntheticMethod(arr, queryFilter, "setFocusPosition", new String[]{"int", "int"}, "JSONObject");
+                addSyntheticMethod(arr, queryFilter, "autoFocusAt", new String[]{"double", "double"}, "JSONObject");
                 addSyntheticMethod(arr, queryFilter, "setAperture", new String[]{"int"}, "JSONObject");
                 addSyntheticMethod(arr, queryFilter, "setShutterSpeed", new String[]{"int", "int"}, "JSONObject");
                 addSyntheticMethod(arr, queryFilter, "setZoomPosition", new String[]{"int", "int"}, "JSONObject");

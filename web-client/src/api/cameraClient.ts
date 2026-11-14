@@ -115,6 +115,15 @@ export interface PhotosResponse {
   photos: PhotoEntry[];
 }
 
+export interface AutoFocusResult {
+  focused: boolean;
+  superseded: boolean;
+  timedOut: boolean;
+  x?: number;
+  y?: number;
+  position?: number;
+}
+
 const STORAGE_KEY = 'pmca_camera_base_url';
 
 export function getDefaultCameraUrl(): string {
@@ -316,6 +325,18 @@ export class CameraClient {
 
   setShutterSpeed(n: number, d: number): Promise<{ currentShutterSpeed_n: number; currentShutterSpeed_d: number; converged: boolean; superseded: boolean }> {
     return this.call('highlevel', 'setShutterSpeed', [n, d]);
+  }
+
+  autoFocusAt(normX: number, normY: number): Promise<AutoFocusResult> {
+    return this.call<AutoFocusResult>('highlevel', 'autoFocusAt', [normX, normY]);
+  }
+
+  setPreviewMagnification(factor: 100 | 200, x: number, y: number): Promise<unknown> {
+    return this.call('camera', 'setPreviewMagnification', [factor, [x, y]]);
+  }
+
+  stopPreviewMagnification(): Promise<unknown> {
+    return this.call('camera', 'stopPreviewMagnification');
   }
 
   /**

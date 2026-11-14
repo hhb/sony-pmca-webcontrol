@@ -435,6 +435,8 @@ export function App() {
               connected={connected}
               onCapture={handleCapture}
               capturing={Boolean(state?.capturing)}
+              previewMagnification={state?.previewMagnification}
+              onError={setErrorMsg}
             />
             <div className="side-column">
               <ExposureControl

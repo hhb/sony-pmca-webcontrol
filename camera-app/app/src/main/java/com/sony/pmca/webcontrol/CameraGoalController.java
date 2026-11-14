@@ -1,5 +1,7 @@
 package com.sony.pmca.webcontrol;
 
+import android.hardware.Camera;
+
 import com.sony.scalar.hardware.CameraEx;
 
 import org.json.JSONArray;
@@ -70,6 +72,7 @@ public class CameraGoalController {
 
     private final MacroServerActivity m_activity;
     private final GoalSlot m_focus = new GoalSlot();
+    private final Object m_focusOpLock = new Object();
     private final GoalSlot m_aperture = new GoalSlot();
     private final GoalSlot m_shutter = new GoalSlot();
     private final GoalSlot m_zoom = new GoalSlot();
@@ -135,6 +138,12 @@ public class CameraGoalController {
             int target = args.getInt(0);
             int tol = args.length() >= 2 ? args.getInt(1) : 0;
             return setFocusPosition(target, Math.max(0, tol));
+        }
+        if ("autoFocusAt".equals(method)) {
+            if (args == null || args.length() < 2) {
+                throw new IllegalArgumentException("autoFocusAt requires (normX, normY)");
+            }
+            return autoFocusAt(args.getDouble(0), args.getDouble(1));
         }
         if ("setAperture".equals(method)) {
             if (args == null || args.length() < 1) {
@@ -269,6 +278,140 @@ public class CameraGoalController {
 
         synchronized (m_focus) {
             return buildResult(Math.abs(targetPos - m_focus.v1) <= tolerance, false, false, m_focus.v1, targetPos, steps);
+        }
+    }
+
+    private JSONObject autoFocusAt(double nx, double ny) throws Exception {
+        final long myGen = m_focus.nextGeneration();
+        final double clampedX = Math.max(0.0, Math.min(1.0, nx));
+        final double clampedY = Math.max(0.0, Math.min(1.0, ny));
+
+        synchronized (m_focusOpLock) {
+            if (!m_focus.isCurrent(myGen)) {
+                JSONObject res = new JSONObject();
+                res.put("focused", false);
+                res.put("superseded", true);
+                res.put("timedOut", false);
+                return res;
+            }
+
+            final Object afLock = new Object();
+            final boolean[] afDone = new boolean[]{false};
+            final boolean[] afSuccess = new boolean[]{false};
+            final int[] targetPoint = new int[]{0, 0};
+
+            try {
+                driveOnMain(new Runnable() {
+                    @Override
+                    public void run() {
+                        CameraEx cam = m_activity.getCameraEx();
+                        if (cam == null) return;
+
+                        try {
+                            cam.stopPreviewMagnification();
+                        } catch (Throwable ignored) {
+                        }
+
+                        Camera normal = cam.getNormalCamera();
+                        try {
+                            normal.cancelAutoFocus();
+                        } catch (Throwable ignored) {
+                        }
+
+                        int left = -784, right = 785, top = -819, bottom = 820;
+                        try {
+                            CameraEx.FocusAreaInfos[] infos = cam.getFocusAreaInfos(0);
+                            if (infos != null) {
+                                for (CameraEx.FocusAreaInfos info : infos) {
+                                    if (info != null && CameraEx.ParametersModifier.FOCUS_AREA_MODE_FLEX_SPOT.equals(info.focusAreaMode)
+                                            && info.rectInfos != null && info.rectInfos.length > 0 && info.rectInfos[0] != null && info.rectInfos[0].rect != null) {
+                                        left = info.rectInfos[0].rect.left;
+                                        right = info.rectInfos[0].rect.right;
+                                        top = info.rectInfos[0].rect.top;
+                                        bottom = info.rectInfos[0].rect.bottom;
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+
+                        int fx = (int) Math.round(left + clampedX * (right - left));
+                        int fy = (int) Math.round(top + clampedY * (bottom - top));
+                        targetPoint[0] = fx;
+                        targetPoint[1] = fy;
+
+                        Camera.Parameters params = cam.createEmptyParameters();
+                        CameraEx.ParametersModifier modifier = cam.createParametersModifier(params);
+                        params.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+                        modifier.setFocusAreaMode(CameraEx.ParametersModifier.FOCUS_AREA_MODE_FLEX_SPOT);
+                        modifier.setAutoFocusMode(CameraEx.ParametersModifier.AUTO_FOCUS_MODE_AF_S);
+                        modifier.setFocusPoint(fx, fy);
+                        normal.setParameters(params);
+
+                        normal.autoFocus(new Camera.AutoFocusCallback() {
+                            @Override
+                            public void onAutoFocus(boolean success, Camera camera) {
+                                synchronized (afLock) {
+                                    afSuccess[0] = success;
+                                    afDone[0] = true;
+                                    afLock.notifyAll();
+                                }
+                            }
+                        });
+                    }
+                });
+
+                long deadline = System.currentTimeMillis() + 5000L;
+                synchronized (afLock) {
+                    while (!afDone[0] && m_focus.isCurrent(myGen)) {
+                        long rem = deadline - System.currentTimeMillis();
+                        if (rem <= 0) break;
+                        try {
+                            afLock.wait(Math.min(rem, 100L));
+                        } catch (InterruptedException ignored) {
+                            break;
+                        }
+                    }
+                }
+            } finally {
+                try {
+                    driveOnMain(new Runnable() {
+                        @Override
+                        public void run() {
+                            CameraEx cam = m_activity.getCameraEx();
+                            if (cam == null) return;
+                            Camera normal = cam.getNormalCamera();
+                            if (!afDone[0] || !m_focus.isCurrent(myGen)) {
+                                try {
+                                    normal.cancelAutoFocus();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                            try {
+                                Camera.Parameters restore = cam.createEmptyParameters();
+                                restore.setFocusMode(CameraEx.ParametersModifier.FOCUS_MODE_MANUAL);
+                                normal.setParameters(restore);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                } catch (Throwable ignored) {
+                }
+            }
+
+            int pos;
+            synchronized (m_focus) {
+                pos = m_focus.v1;
+            }
+            JSONObject res = new JSONObject();
+            res.put("focused", afSuccess[0]);
+            res.put("superseded", !m_focus.isCurrent(myGen));
+            res.put("timedOut", !afDone[0]);
+            res.put("x", targetPoint[0]);
+            res.put("y", targetPoint[1]);
+            res.put("position", pos);
+            return res;
         }
     }
 

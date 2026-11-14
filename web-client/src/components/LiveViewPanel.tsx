@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CameraClient } from '../api/cameraClient';
+import type { CameraClient, CameraState } from '../api/cameraClient';
 
 interface LiveViewPanelProps {
   client: CameraClient;
   connected: boolean;
   onCapture: () => void;
   capturing: boolean;
+  previewMagnification?: CameraState['previewMagnification'];
+  onError?: (msg: string | null) => void;
 }
 
 function getLiveViewClientId(): string {
@@ -25,10 +27,11 @@ export function LiveViewPanel({
   connected,
   onCapture,
   capturing,
+  previewMagnification,
+  onError,
 }: LiveViewPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const histCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const loupeCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [streaming, setStreaming] = useState(true);
   const [pageVisible, setPageVisible] = useState<boolean>(() =>
@@ -37,44 +40,85 @@ export function LiveViewPanel({
   const [showGrid, setShowGrid] = useState(true);
   const [peaking, setPeaking] = useState(false);
   const [showHistogram, setShowHistogram] = useState(false);
-  const [showLoupe, setShowLoupe] = useState(false);
-  const [loupeZoom, setLoupeZoom] = useState<2 | 3 | 4>(3);
+  const [toolMode, setToolMode] = useState<'focus' | 'magnify'>('focus');
+  const [afStatus, setAfStatus] = useState<'idle' | 'focusing' | 'ok' | 'fail'>('idle');
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const [autoResetSec, setAutoResetSec] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('pmca_mag_auto_reset_sec');
+      if (saved !== null) {
+        const n = Number(saved);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+    } catch {}
+    return 0;
+  });
 
   const [fps, setFps] = useState<number>(0);
   const [frameError, setFrameError] = useState<string | null>(null);
 
+  const magEnabled = Boolean(previewMagnification?.enabled);
+  const magRatio = previewMagnification?.ratio ?? 100;
+  const magLabel = !magEnabled ? '1x' : magRatio >= 900 ? '11.7x' : '5.9x';
+
   const focusPointRef = useRef<{ x: number; y: number } | null>(null);
   focusPointRef.current = focusPoint;
+  const afStatusRef = useRef<'idle' | 'focusing' | 'ok' | 'fail'>('idle');
+  afStatusRef.current = afStatus;
   const liveViewCidRef = useRef<string>(getLiveViewClientId());
-  const showLoupeRef = useRef<boolean>(false);
-  showLoupeRef.current = showLoupe;
-  const loupeZoomRef = useRef<number>(3);
-  loupeZoomRef.current = loupeZoom;
-  const loupeTimerRef = useRef<number | null>(null);
+  const afTimerRef = useRef<number | null>(null);
+  const magResetTimerRef = useRef<number | null>(null);
 
-  const clearLoupeTimer = () => {
-    if (loupeTimerRef.current !== null) {
-      window.clearTimeout(loupeTimerRef.current);
-      loupeTimerRef.current = null;
+  const clearMagResetTimer = () => {
+    if (magResetTimerRef.current !== null) {
+      window.clearTimeout(magResetTimerRef.current);
+      magResetTimerRef.current = null;
     }
   };
 
-  const scheduleLoupeDismiss = (delayMs = 3000) => {
-    clearLoupeTimer();
-    loupeTimerRef.current = window.setTimeout(() => {
-      setShowLoupe(false);
-      loupeTimerRef.current = null;
+  const scheduleMagReset = (delaySec: number) => {
+    clearMagResetTimer();
+    if (delaySec <= 0) return;
+    magResetTimerRef.current = window.setTimeout(() => {
+      magResetTimerRef.current = null;
+      void client.stopPreviewMagnification().catch(() => {});
+    }, delaySec * 1000);
+  };
+
+  const clearAfTimer = () => {
+    if (afTimerRef.current !== null) {
+      window.clearTimeout(afTimerRef.current);
+      afTimerRef.current = null;
+    }
+  };
+
+  const scheduleAfDismiss = (delayMs = 2000) => {
+    clearAfTimer();
+    afTimerRef.current = window.setTimeout(() => {
+      setAfStatus('idle');
+      setFocusPoint(null);
+      afTimerRef.current = null;
     }, delayMs);
   };
 
   useEffect(() => {
     return () => {
-      if (loupeTimerRef.current !== null) {
-        window.clearTimeout(loupeTimerRef.current);
+      if (afTimerRef.current !== null) {
+        window.clearTimeout(afTimerRef.current);
+      }
+      if (magResetTimerRef.current !== null) {
+        window.clearTimeout(magResetTimerRef.current);
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!magEnabled) {
+      clearMagResetTimer();
+      return;
+    }
+    scheduleMagReset(autoResetSec);
+  }, [magEnabled, autoResetSec]);
   // Keep overlay flags in refs so toggling them doesn't reconnect the MJPEG stream
   const showGridRef = useRef(showGrid);
   showGridRef.current = showGrid;
@@ -153,46 +197,21 @@ export function LiveViewPanel({
                 }
               }
 
-              // Update magnified loupe canvas before drawing overlays on main canvas
-              if (showLoupeRef.current && focusPointRef.current && loupeCanvasRef.current) {
-                const lCanvas = loupeCanvasRef.current;
-                const lCtx = lCanvas.getContext('2d');
-                if (lCtx) {
-                  const z = loupeZoomRef.current;
-                  const srcW = canvas.width / z;
-                  const srcH = canvas.height / z;
-                  const srcX = Math.max(0, Math.min(canvas.width - srcW, focusPointRef.current.x - srcW / 2));
-                  const srcY = Math.max(0, Math.min(canvas.height - srcH, focusPointRef.current.y - srcH / 2));
-
-                  lCtx.clearRect(0, 0, lCanvas.width, lCanvas.height);
-                  lCtx.imageSmoothingEnabled = true;
-                  lCtx.imageSmoothingQuality = 'high';
-                  lCtx.drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, lCanvas.width, lCanvas.height);
-
-                  // Draw delicate crosshair in center of loupe
-                  const cx = lCanvas.width / 2;
-                  const cy = lCanvas.height / 2;
-                  lCtx.strokeStyle = 'rgba(126, 231, 135, 0.7)';
-                  lCtx.lineWidth = 1;
-                  lCtx.beginPath();
-                  lCtx.moveTo(cx - 10, cy);
-                  lCtx.lineTo(cx + 10, cy);
-                  lCtx.moveTo(cx, cy - 10);
-                  lCtx.lineTo(cx, cy + 10);
-                  lCtx.stroke();
-                }
-              }
-
-              // Draw target focus box on main canvas
-              if (showLoupeRef.current && focusPointRef.current) {
-                const z = loupeZoomRef.current;
+              // Draw AF target box on main canvas
+              if (afStatusRef.current !== 'idle' && focusPointRef.current) {
+                const label =
+                  afStatusRef.current === 'focusing'
+                    ? 'AF...'
+                    : afStatusRef.current === 'ok'
+                      ? 'AF OK'
+                      : 'AF Fail';
                 drawFocusBox(
                   ctx,
                   focusPointRef.current.x,
                   focusPointRef.current.y,
-                  canvas.width / z,
-                  canvas.height / z,
-                  `${z}x`,
+                  72,
+                  72,
+                  label,
                 );
               }
 
@@ -298,7 +317,8 @@ export function LiveViewPanel({
     };
   }, [client, connected, streaming, pageVisible]);
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!connected) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -329,9 +349,34 @@ export function LiveViewPanel({
     const clickX = Math.round(normX * canvas.width);
     const clickY = Math.round(normY * canvas.height);
 
-    setFocusPoint({ x: clickX, y: clickY });
-    setShowLoupe(true);
-    scheduleLoupeDismiss(3000);
+    if (toolMode === 'focus') {
+      clearAfTimer();
+      setFocusPoint({ x: clickX, y: clickY });
+      setAfStatus('focusing');
+      try {
+        const res = await client.autoFocusAt(normX, normY);
+        if (!res.superseded) {
+          setAfStatus(res.focused ? 'ok' : 'fail');
+          scheduleAfDismiss(2000);
+        }
+      } catch (err) {
+        setAfStatus('fail');
+        scheduleAfDismiss(2000);
+        onError?.(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+
+    // Magnify tool: map normalized click to Sony [-1000..1000]
+    const sx = Math.max(-1000, Math.min(1000, Math.round((normX - 0.5) * 2000)));
+    const sy = Math.max(-1000, Math.min(1000, Math.round((normY - 0.5) * 2000)));
+    const nextFactor: 100 | 200 = !magEnabled ? 100 : 200;
+    try {
+      await client.setPreviewMagnification(nextFactor, sx, sy);
+      scheduleMagReset(autoResetSec);
+    } catch (err) {
+      onError?.(err instanceof Error ? err.message : String(err));
+    }
   };
 
   return (
@@ -373,28 +418,6 @@ export function LiveViewPanel({
           >
             Hist
           </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${showLoupe ? 'btn-active' : ''}`}
-            onClick={() => {
-              if (!showLoupe) {
-                if (!focusPoint) {
-                  const canvas = canvasRef.current;
-                  const cx = canvas ? Math.round(canvas.width / 2) : 320;
-                  const cy = canvas ? Math.round(canvas.height / 2) : 240;
-                  setFocusPoint({ x: cx, y: cy });
-                }
-                setShowLoupe(true);
-                scheduleLoupeDismiss(3000);
-              } else {
-                clearLoupeTimer();
-                setShowLoupe(false);
-              }
-            }}
-            title="Click image to zoom in on focus area"
-          >
-            Loupe
-          </button>
         </div>
       </div>
 
@@ -403,8 +426,8 @@ export function LiveViewPanel({
           ref={canvasRef}
           className="liveview-canvas"
           style={{ cursor: 'crosshair' }}
-          onClick={handleCanvasClick}
-          title="Click to focus loupe here"
+          onClick={(e) => void handleCanvasClick(e)}
+          title={toolMode === 'focus' ? 'Click image to autofocus here' : 'Click image to magnify here'}
         />
         {showHistogram && connected && streaming && !frameError && (
           <canvas
@@ -413,43 +436,6 @@ export function LiveViewPanel({
             height={56}
             className="histogram-overlay"
           />
-        )}
-        {showLoupe && focusPoint && connected && streaming && !frameError && (
-          <div
-            className={`loupe-window ${focusPoint.x > (canvasRef.current?.width ?? 640) / 2 ? 'loupe-left' : 'loupe-right'}`}
-            onMouseEnter={clearLoupeTimer}
-            onMouseLeave={() => scheduleLoupeDismiss(3000)}
-          >
-            <div className="loupe-header">
-              <span className="loupe-title">🔍 {loupeZoom}x Focus Zoom</span>
-              <div className="loupe-toolbar">
-                <button
-                  type="button"
-                  className="btn btn-xs"
-                  onClick={() => {
-                    setLoupeZoom((z) => (z === 2 ? 3 : z === 3 ? 4 : 2));
-                    scheduleLoupeDismiss(3000);
-                  }}
-                  title="Switch zoom level (2x / 3x / 4x)"
-                >
-                  {loupeZoom}x
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-xs"
-                  onClick={() => {
-                    clearLoupeTimer();
-                    setShowLoupe(false);
-                  }}
-                  title="Close Loupe"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <canvas ref={loupeCanvasRef} width={180} height={180} className="loupe-canvas" />
-            <div className="loupe-hint">Click image to move focus box (auto-closes in 3s)</div>
-          </div>
         )}
         {(!connected || frameError) && (
           <div className="liveview-placeholder">
@@ -465,6 +451,73 @@ export function LiveViewPanel({
         >
           <span className="shutter-inner" />
         </button>
+      </div>
+
+      <div className="toolbar-row" style={{ marginTop: 8, justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="toolbar-row">
+          <button
+            type="button"
+            className={`btn btn-sm ${toolMode === 'focus' ? 'btn-active' : ''}`}
+            disabled={!connected}
+            onClick={() => {
+              setToolMode('focus');
+              if (magEnabled) {
+                void client.stopPreviewMagnification().catch(() => {});
+              }
+            }}
+            title="Click image to autofocus & lock focus"
+          >
+            🎯 对焦
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${toolMode === 'magnify' ? 'btn-active' : ''}`}
+            disabled={!connected}
+            onClick={() => setToolMode('magnify')}
+            title="Click image to magnify (5.9x / 11.7x)"
+          >
+            🔍 放大
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!connected || !magEnabled}
+            onClick={() => {
+              clearMagResetTimer();
+              void client.stopPreviewMagnification().catch((err) => {
+                onError?.(err instanceof Error ? err.message : String(err));
+              });
+            }}
+            title="Reset magnification to 1x"
+          >
+            ↩ 重置
+          </button>
+          <select
+            className="btn btn-sm"
+            value={autoResetSec}
+            onChange={(e) => {
+              const sec = Number(e.target.value);
+              setAutoResetSec(sec);
+              try {
+                localStorage.setItem('pmca_mag_auto_reset_sec', String(sec));
+              } catch {}
+            }}
+            title="Auto-reset magnification to 1x after N seconds"
+          >
+            <option value={0}>自动重置: 关</option>
+            <option value={3}>3秒后重置</option>
+            <option value={5}>5秒后重置</option>
+            <option value={10}>10秒后重置</option>
+          </select>
+        </div>
+        <div className="toolbar-row" style={{ gap: 6 }}>
+          <span className="badge">{magLabel}</span>
+          {afStatus !== 'idle' && (
+            <span className="badge">
+              {afStatus === 'focusing' ? 'AF...' : afStatus === 'ok' ? 'AF OK' : 'AF Fail'}
+            </span>
+          )}
+        </div>
       </div>
     </section>
   );
