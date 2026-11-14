@@ -231,6 +231,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 if (bytes < 1L) bytes = 1L;
                 if (bytes > 10L * 1024L * 1024L) bytes = 10L * 1024L * 1024L;
                 Response res = new Response(Response.Status.OK, "application/octet-stream", new BenchInputStream(bytes));
+                res.addHeader("Content-Length", String.valueOf(bytes));
                 res.addHeader("Cache-Control", "no-store");
                 return addCors(res);
             }
@@ -317,7 +318,7 @@ public class MacroHttpServer extends NanoHTTPD {
 
         @Override
         public int available() {
-            return (int) Math.min(m_remaining, CHUNK.length);
+            return (int) Math.min(m_remaining, Integer.MAX_VALUE);
         }
 
         @Override

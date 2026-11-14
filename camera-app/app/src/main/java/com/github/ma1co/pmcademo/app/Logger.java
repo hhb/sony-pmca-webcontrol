@@ -9,20 +9,32 @@ import java.util.Locale;
 
 public class Logger {
     private static final SimpleDateFormat TIME_FMT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
-    private static final int BUFFER_SIZE = 4096;
-    private static BufferedWriter s_writer = null;
+    private static final int BUFFER_FLUSH_CHARS = 2048;
+    private static final StringBuilder s_pending = new StringBuilder();
 
     public static File getFile() {
         return new File(Environment.getExternalStorageDirectory(), "PMCADEMO/LOG.TXT");
     }
 
     public static synchronized void flush() {
-        if (s_writer != null) {
-            try {
-                s_writer.flush();
-            } catch (IOException e) {
-                try { s_writer.close(); } catch (IOException ignored) {}
-                s_writer = null;
+        if (s_pending.length() == 0) {
+            return;
+        }
+        BufferedWriter writer = null;
+        try {
+            File f = getFile();
+            if (f.getParentFile() != null) {
+                f.getParentFile().mkdirs();
+            }
+            writer = new BufferedWriter(new FileWriter(f, true));
+            writer.write(s_pending.toString());
+            s_pending.setLength(0);
+        } catch (IOException ignored) {
+        } finally {
+            if (writer != null) {
+                try {
+                    writer.close();
+                } catch (IOException ignored) {}
             }
         }
     }
@@ -32,24 +44,9 @@ public class Logger {
     }
 
     private static synchronized void logLine(String msg, boolean flushNow) {
-        try {
-            if (s_writer == null) {
-                File f = getFile();
-                if (f.getParentFile() != null) {
-                    f.getParentFile().mkdirs();
-                }
-                s_writer = new BufferedWriter(new FileWriter(f, true), BUFFER_SIZE);
-            }
-            s_writer.append(msg);
-            s_writer.newLine();
-            if (flushNow) {
-                s_writer.flush();
-            }
-        } catch (IOException e) {
-            if (s_writer != null) {
-                try { s_writer.close(); } catch (IOException ignored) {}
-                s_writer = null;
-            }
+        s_pending.append(msg).append('\n');
+        if (flushNow || s_pending.length() >= BUFFER_FLUSH_CHARS) {
+            flush();
         }
     }
 
