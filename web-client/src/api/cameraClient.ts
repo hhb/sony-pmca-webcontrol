@@ -47,6 +47,7 @@ export interface CameraState {
   previewMagnification?: {
     enabled?: boolean;
     ratio?: number;
+    pos?: [number, number] | number[];
   };
   lastStoreImage?: {
     imageId?: number;

@@ -367,9 +367,12 @@ export function LiveViewPanel({
       return;
     }
 
-    // Magnify tool: map normalized click to Sony [-1000..1000]
-    const sx = Math.max(-1000, Math.min(1000, Math.round((normX - 0.5) * 2000)));
-    const sy = Math.max(-1000, Math.min(1000, Math.round((normY - 0.5) * 2000)));
+    // Magnify tool: map normalized click to Sony [-1000..1000], accounting for current magnification viewport
+    const factor = magEnabled && magRatio > 100 ? magRatio / 100 : 1;
+    const curX = magEnabled ? (previewMagnification?.pos?.[0] ?? 0) : 0;
+    const curY = magEnabled ? (previewMagnification?.pos?.[1] ?? 0) : 0;
+    const sx = Math.max(-1000, Math.min(1000, Math.round(curX + (normX - 0.5) * (2000 / factor))));
+    const sy = Math.max(-1000, Math.min(1000, Math.round(curY + (normY - 0.5) * (2000 / factor))));
     const nextFactor: 100 | 200 = !magEnabled ? 100 : 200;
     try {
       await client.setPreviewMagnification(nextFactor, sx, sy);
@@ -467,7 +470,7 @@ export function LiveViewPanel({
             }}
             title="Click image to autofocus & lock focus"
           >
-            🎯 对焦
+            🎯 Focus
           </button>
           <button
             type="button"
@@ -476,7 +479,7 @@ export function LiveViewPanel({
             onClick={() => setToolMode('magnify')}
             title="Click image to magnify (5.9x / 11.7x)"
           >
-            🔍 放大
+            🔍 Magnify
           </button>
           <button
             type="button"
@@ -490,7 +493,7 @@ export function LiveViewPanel({
             }}
             title="Reset magnification to 1x"
           >
-            ↩ 重置
+            ↩ Reset
           </button>
           <select
             className="btn btn-sm"
@@ -504,10 +507,10 @@ export function LiveViewPanel({
             }}
             title="Auto-reset magnification to 1x after N seconds"
           >
-            <option value={0}>自动重置: 关</option>
-            <option value={3}>3秒后重置</option>
-            <option value={5}>5秒后重置</option>
-            <option value={10}>10秒后重置</option>
+            <option value={0}>Auto-Reset: Off</option>
+            <option value={3}>Reset in 3s</option>
+            <option value={5}>Reset in 5s</option>
+            <option value={10}>Reset in 10s</option>
           </select>
         </div>
         <div className="toolbar-row" style={{ gap: 6 }}>
