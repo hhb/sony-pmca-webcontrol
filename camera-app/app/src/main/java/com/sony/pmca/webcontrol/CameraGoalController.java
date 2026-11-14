@@ -5,6 +5,7 @@ import com.sony.scalar.hardware.CameraEx;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.BitSet;
 import java.util.concurrent.Callable;
 
 /**
@@ -132,7 +133,7 @@ public class CameraGoalController {
                 throw new IllegalArgumentException("setFocusPosition requires (targetPos[, tolerance])");
             }
             int target = args.getInt(0);
-            int tol = args.length() >= 2 ? args.getInt(1) : 2;
+            int tol = args.length() >= 2 ? args.getInt(1) : 0;
             return setFocusPosition(target, Math.max(0, tol));
         }
         if ("setAperture".equals(method)) {
@@ -164,6 +165,12 @@ public class CameraGoalController {
         final long myGen = m_focus.nextGeneration();
         int stalled = 0;
         int steps = 0;
+        int bestPos = -1;
+        int bestDist = Integer.MAX_VALUE;
+        int prevObservedPos = Integer.MIN_VALUE;
+        boolean returningToBest = false;
+        int returnSteps = 0;
+        BitSet visited = new BitSet();
 
         for (int i = 0; i < 60; i++) {
             int current;
@@ -182,14 +189,51 @@ public class CameraGoalController {
             }
 
             int clampedTarget = (maxPos > 0) ? Math.max(0, Math.min(maxPos, targetPos)) : targetPos;
-            int diff = clampedTarget - current;
-            if (Math.abs(diff) <= tolerance) {
+            int diffToTarget = clampedTarget - current;
+            int absDist = Math.abs(diffToTarget);
+            if (absDist <= tolerance) {
                 return buildResult(true, false, false, current, clampedTarget, steps);
             }
 
-            final int dir = diff > 0 ? FOCUS_FAR : FOCUS_NEAR;
-            final int absDiff = Math.abs(diff);
-            final int speed = absDiff > 30 ? 4 : absDiff > 12 ? 3 : absDiff > 4 ? 2 : 1;
+            if (returningToBest) {
+                if (current == bestPos || returnSteps >= 3) {
+                    return buildResult(true, false, false, current, clampedTarget, steps);
+                }
+            } else if (current != prevObservedPos) {
+                // Only update visited / best tracking when position actually moved
+                boolean seenBefore = (current >= 0) && visited.get(current);
+                if (current >= 0) {
+                    visited.set(current);
+                }
+                if (absDist < bestDist) {
+                    bestDist = absDist;
+                    bestPos = current;
+                } else if (absDist == bestDist || seenBefore) {
+                    // Equidistant overshoot (e.g. 69 -> 71 around 70) or cycle detected: stop immediately
+                    return buildResult(true, false, false, current, clampedTarget, steps);
+                } else {
+                    // absDist > bestDist: overshot past bestPos, step back to bestPos
+                    returningToBest = true;
+                }
+                prevObservedPos = current;
+            }
+
+            int stepTarget = returningToBest ? bestPos : clampedTarget;
+            int stepDiff = stepTarget - current;
+            if (stepDiff == 0) {
+                return buildResult(true, false, false, current, clampedTarget, steps);
+            }
+
+            final int dir = stepDiff > 0 ? FOCUS_FAR : FOCUS_NEAR;
+            final int absStepDiff = Math.abs(stepDiff);
+            int baseSpeed = returningToBest ? 1 : (absStepDiff > 30 ? 4 : absStepDiff > 12 ? 3 : absStepDiff > 4 ? 2 : 1);
+            if (stalled >= 2 && baseSpeed == 1 && !returningToBest) {
+                baseSpeed = 2;
+            }
+            final int speed = baseSpeed;
+            if (returningToBest) {
+                returnSteps++;
+            }
 
             long seqBefore = m_focus.getUpdateSeq();
             driveOnMain(new Runnable() {
@@ -201,7 +245,7 @@ public class CameraGoalController {
             });
             steps++;
 
-            m_focus.waitForChange(myGen, seqBefore, 260);
+            m_focus.waitForChange(myGen, seqBefore, 450);
             if (!m_focus.isCurrent(myGen)) {
                 synchronized (m_focus) {
                     return buildResult(false, true, false, m_focus.v1, clampedTarget, steps);
@@ -209,9 +253,16 @@ public class CameraGoalController {
             }
             if (m_focus.getUpdateSeq() == seqBefore) {
                 stalled++;
-                if (stalled >= 3) {
+                if (stalled >= 6) {
                     synchronized (m_focus) {
                         return buildResult(false, false, true, m_focus.v1, clampedTarget, steps);
+                    }
+                }
+                // Brief preemptible cooldown before retrying when the lens ignored/missed a step
+                m_focus.waitForChange(myGen, seqBefore, 120);
+                if (!m_focus.isCurrent(myGen)) {
+                    synchronized (m_focus) {
+                        return buildResult(false, true, false, m_focus.v1, clampedTarget, steps);
                     }
                 }
             } else {

@@ -2,8 +2,6 @@ import { useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
-  FOCUS_FAR,
-  FOCUS_NEAR,
   ZOOM_TELE,
   ZOOM_WIDE,
 } from '../api/cameraClient';
@@ -28,24 +26,63 @@ export function FocusControl({
   const [steps, setSteps] = useState<number>(5);
   const [settleMs, setSettleMs] = useState<number>(400);
   const [stackStatus, setStackStatus] = useState<string | null>(null);
+  const [targetFocus, setTargetFocus] = useState<number | null>(null);
+  const targetFocusRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const gotoAbortRef = useRef<AbortController | null>(null);
 
   const currentFocus = state?.focus?.currentPosition;
   const maxFocus = state?.focus?.maxPosition;
+  const canDragFocus =
+    connected && !stackRunning && typeof maxFocus === 'number' && maxFocus > 0;
+  const displayFocus =
+    targetFocus ?? (typeof currentFocus === 'number' ? currentFocus : 0);
   const pct =
-    typeof currentFocus === 'number' && typeof maxFocus === 'number' && maxFocus > 0
-      ? Math.min(100, Math.max(0, (currentFocus / maxFocus) * 100))
+    typeof maxFocus === 'number' && maxFocus > 0
+      ? Math.min(100, Math.max(0, (displayFocus / maxFocus) * 100))
       : 0;
 
-  const stepFocus = async (dir: 0 | 1, speed: 1 | 2 | 3 | 4) => {
-    setBusy(true);
+  const moveFocusTo = async (rawTarget: number) => {
+    if (!canDragFocus || typeof maxFocus !== 'number') {
+      targetFocusRef.current = null;
+      setTargetFocus(null);
+      return;
+    }
+    const target = Math.max(0, Math.min(maxFocus, Math.round(rawTarget)));
+    targetFocusRef.current = target;
+    setTargetFocus(target);
+
+    gotoAbortRef.current?.abort();
+    const controller = new AbortController();
+    gotoAbortRef.current = controller;
     try {
-      await client.focusStep(dir, speed);
+      await client.gotoFocus(target, 0, controller.signal);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
       onError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      if (gotoAbortRef.current === controller) {
+        gotoAbortRef.current = null;
+        targetFocusRef.current = null;
+        setTargetFocus(null);
+      }
     }
+  };
+
+  const commitFocusDrag = () => {
+    const target = targetFocusRef.current;
+    if (target === null) return;
+    void moveFocusTo(target);
+  };
+
+  const stepFocus = (delta: number) => {
+    if (typeof currentFocus !== 'number' || !canDragFocus) {
+      return;
+    }
+    const base = targetFocusRef.current ?? currentFocus;
+    void moveFocusTo(base + delta);
   };
 
   const stepZoom = async (dir: 0 | 1) => {
@@ -108,7 +145,11 @@ export function FocusControl({
         <div className="panel-title">
           <span>Focus &amp; Zoom</span>
           <span className="badge">
-            MF: {currentFocus ?? '--'} / {maxFocus ?? '--'}
+            MF:{' '}
+            {targetFocus !== null && targetFocus !== currentFocus
+              ? `${currentFocus ?? '--'} → ${targetFocus}`
+              : (currentFocus ?? '--')}{' '}
+            / {maxFocus ?? '--'}
           </span>
         </div>
         {state?.powerZoom && (
@@ -133,62 +174,100 @@ export function FocusControl({
         )}
       </div>
 
-      <div className="progress-track" title={`Focus ${currentFocus ?? 0} / ${maxFocus ?? 0}`}>
-        <div className="progress-fill" style={{ width: `${pct}%` }} />
+      <div
+        className="focus-slider-wrap"
+        title={`Focus ${displayFocus} / ${maxFocus ?? 0} (drag or click to move)`}
+      >
+        <div className="progress-track">
+          <div
+            className="progress-fill"
+            style={{
+              width: `${pct}%`,
+              transition: targetFocus !== null ? 'none' : undefined,
+            }}
+          />
+        </div>
+        <input
+          type="range"
+          className="focus-slider"
+          min={0}
+          max={typeof maxFocus === 'number' && maxFocus > 0 ? maxFocus : 100}
+          value={displayFocus}
+          disabled={!canDragFocus}
+          aria-label="Manual focus position"
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            targetFocusRef.current = next;
+            setTargetFocus(next);
+          }}
+          onPointerUp={commitFocusDrag}
+          onKeyUp={(e) => {
+            if (
+              e.key === 'ArrowLeft' ||
+              e.key === 'ArrowRight' ||
+              e.key === 'ArrowUp' ||
+              e.key === 'ArrowDown' ||
+              e.key === 'Home' ||
+              e.key === 'End'
+            ) {
+              commitFocusDrag();
+            }
+          }}
+        />
       </div>
 
       <div className="focus-buttons">
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_NEAR, 4)}
-          title="Near (Fast)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(-20)}
+          title="Near (-20)"
         >
           &laquo;&laquo; Near
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_NEAR, 2)}
-          title="Near (Medium)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(-5)}
+          title="Near (-5)"
         >
           &laquo;
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_NEAR, 1)}
-          title="Near (Fine)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(-1)}
+          title="Near (-1)"
         >
           &lsaquo;
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_FAR, 1)}
-          title="Far (Fine)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(1)}
+          title="Far (+1)"
         >
           &rsaquo;
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_FAR, 2)}
-          title="Far (Medium)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(5)}
+          title="Far (+5)"
         >
           &raquo;
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!connected || busy}
-          onClick={() => stepFocus(FOCUS_FAR, 4)}
-          title="Far (Fast)"
+          disabled={!canDragFocus || typeof currentFocus !== 'number'}
+          onClick={() => stepFocus(20)}
+          title="Far (+20)"
         >
           Far &raquo;&raquo;
         </button>

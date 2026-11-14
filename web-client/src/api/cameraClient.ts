@@ -1,5 +1,3 @@
-export const FOCUS_NEAR = 0;
-export const FOCUS_FAR = 1;
 export const ZOOM_TELE = 0;
 export const ZOOM_WIDE = 1;
 
@@ -285,10 +283,6 @@ export class CameraClient {
     return this.call('params', 'setExposureCompensation', [index]);
   }
 
-  focusStep(direction: 0 | 1, speed: 1 | 2 | 3 | 4 = 2): Promise<unknown> {
-    return this.call('camera', 'startOneShotFocusDrive', [direction, speed]);
-  }
-
   async zoomStep(direction: 0 | 1, speed = 1): Promise<void> {
     await this.call('camera', 'startZoom', [direction, speed]);
     await new Promise((r) => setTimeout(r, 90));
@@ -312,7 +306,7 @@ export class CameraClient {
    */
   async gotoFocus(
     targetPos: number,
-    tolerance = 2,
+    tolerance = 0,
     signal?: AbortSignal,
   ): Promise<number> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -337,7 +331,7 @@ export class CameraClient {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const ratio = i / (count - 1);
       const target = Math.round(startPos + (endPos - startPos) * ratio);
-      const actual = await this.gotoFocus(target, 2, signal);
+      const actual = await this.gotoFocus(target, 0, signal);
       onProgress({ index: i + 1, total: count, targetPos: target, actualPos: actual });
       await new Promise((r) => setTimeout(r, settleMs));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
