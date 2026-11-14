@@ -76,6 +76,18 @@ function applyEventsToState(
   return { next, needFullRefresh };
 }
 
+function getEventsClientId(): string {
+  const fallback = `ev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const existing = window.sessionStorage.getItem('pmca_ev_cid');
+    if (existing) return existing;
+    window.sessionStorage.setItem('pmca_ev_cid', fallback);
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function App() {
   const [urlInput, setUrlInput] = useState<string>(() => getDefaultCameraUrl());
   const [activeUrl, setActiveUrl] = useState<string>(() => getDefaultCameraUrl());
@@ -233,56 +245,103 @@ export function App() {
     [client, queueSavePhoto],
   );
 
-  // Initial state fetch + long-polling /api/events
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
+  const eventsCidRef = useRef<string>(getEventsClientId());
+  const [pageVisible, setPageVisible] = useState<boolean>(() =>
+    typeof document === 'undefined' ? true : !document.hidden,
+  );
 
-    const loop = async () => {
-      await refreshState();
-      while (!cancelled) {
-        try {
-          const res = await client.pollEvents(seqRef.current, 10, controller.signal);
-          if (cancelled) break;
-          setConnected(true);
-          if (typeof res.seq === 'number') {
-            seqRef.current = res.seq;
-          }
-          if (res.events && res.events.length > 0) {
-            setEvents((prev) => [...res.events.slice().reverse(), ...prev].slice(0, 30));
-            let needFullRefresh = false;
-            setState((prev) => {
-              const applied = applyEventsToState(prev, res.events);
-              needFullRefresh = applied.needFullRefresh;
-              return applied.next;
-            });
-            for (const ev of res.events) {
-              if (ev.type === 'Jpeg' || ev.type === 'StoreImageComplete') {
-                handleCaptureEvent(ev);
-              }
-            }
-            if (needFullRefresh) {
-              const s = await client.getState();
-              if (!cancelled) setState(s);
-            }
-          }
-        } catch (err) {
-          if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
-            break;
-          }
-          setConnected(false);
-          await new Promise((r) => setTimeout(r, 2000));
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      setPageVisible(!document.hidden);
+    };
+    const onPageHide = () => {
+      client.closeEventsStream(eventsCidRef.current);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [client]);
+
+  // Initial state fetch + SSE /api/events/stream (disconnects when tab is inactive, resyncs on reconnect)
+  useEffect(() => {
+    if (!pageVisible) {
+      client.closeEventsStream(eventsCidRef.current);
+      return;
+    }
+
+    let cancelled = false;
+    let eventSource: EventSource | null = null;
+    let needsResync = false;
+
+    const handleIncomingEvents = async (incoming: CameraEvent[]) => {
+      if (cancelled || incoming.length === 0) return;
+      setEvents((prev) => [...incoming.slice().reverse(), ...prev].slice(0, 30));
+      let needFullRefresh = false;
+      setState((prev) => {
+        const applied = applyEventsToState(prev, incoming);
+        needFullRefresh = applied.needFullRefresh;
+        return applied.next;
+      });
+      for (const ev of incoming) {
+        if (ev.type === 'Jpeg' || ev.type === 'StoreImageComplete') {
+          handleCaptureEvent(ev);
         }
+      }
+      if (needFullRefresh) {
+        await refreshState();
       }
     };
 
-    void loop();
+    const start = async () => {
+      await refreshState();
+      if (cancelled) return;
+
+      const es = new EventSource(client.eventsStreamUrl(seqRef.current, eventsCidRef.current));
+      eventSource = es;
+
+      es.onopen = () => {
+        if (cancelled) return;
+        setConnected(true);
+        if (needsResync) {
+          needsResync = false;
+          void refreshState();
+        }
+      };
+
+      es.onmessage = (msg) => {
+        if (cancelled || !msg.data) return;
+        try {
+          const ev = JSON.parse(msg.data) as CameraEvent;
+          if (typeof ev.seq === 'number' && ev.seq > seqRef.current) {
+            seqRef.current = ev.seq;
+          }
+          setConnected(true);
+          void handleIncomingEvents([ev]);
+        } catch {
+          // Ignore malformed event payloads
+        }
+      };
+
+      es.onerror = () => {
+        if (cancelled) return;
+        setConnected(false);
+        needsResync = true;
+      };
+    };
+
+    void start();
 
     return () => {
       cancelled = true;
-      controller.abort();
+      if (eventSource) {
+        eventSource.close();
+      }
+      client.closeEventsStream(eventsCidRef.current);
     };
-  }, [client, handleCaptureEvent, refreshState]);
+  }, [client, handleCaptureEvent, pageVisible, refreshState]);
 
   const handleConnectSubmit = (e: React.FormEvent) => {
     e.preventDefault();

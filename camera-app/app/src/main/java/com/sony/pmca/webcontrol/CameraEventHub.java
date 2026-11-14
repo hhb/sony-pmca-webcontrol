@@ -79,6 +79,12 @@ public class CameraEventHub {
         }
     }
 
+    public void wakeAll() {
+        synchronized (m_lock) {
+            m_lock.notifyAll();
+        }
+    }
+
     public JSONObject getStateSnapshot() {
         synchronized (m_lock) {
             try {

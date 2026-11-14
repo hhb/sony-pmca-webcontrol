@@ -164,6 +164,7 @@ public final class PhotoStorageHelper {
     }
 
     public static String getCrashLogText() {
+        Logger.flush();
         File f = Logger.getFile();
         if (!f.exists()) {
             return "Log file does not exist yet: " + f.getAbsolutePath();

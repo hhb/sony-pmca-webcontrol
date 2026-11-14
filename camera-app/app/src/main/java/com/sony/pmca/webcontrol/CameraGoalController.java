@@ -172,7 +172,7 @@ public class CameraGoalController {
         int returnSteps = 0;
         BitSet visited = new BitSet();
 
-        for (int i = 0; i < 60; i++) {
+        for (int i = 0; i < 80; i++) {
             int current;
             boolean has;
             int maxPos;
@@ -226,11 +226,7 @@ public class CameraGoalController {
 
             final int dir = stepDiff > 0 ? FOCUS_FAR : FOCUS_NEAR;
             final int absStepDiff = Math.abs(stepDiff);
-            int baseSpeed = returningToBest ? 1 : (absStepDiff > 30 ? 4 : absStepDiff > 12 ? 3 : absStepDiff > 4 ? 2 : 1);
-            if (stalled >= 2 && baseSpeed == 1 && !returningToBest) {
-                baseSpeed = 2;
-            }
-            final int speed = baseSpeed;
+            final int speed = returningToBest ? 1 : (absStepDiff > 90 ? 6 : absStepDiff > 50 ? 5 : absStepDiff > 22 ? 4 : absStepDiff > 8 ? 3 : absStepDiff > 3 ? 2 : 1);
             if (returningToBest) {
                 returnSteps++;
             }
@@ -245,24 +241,25 @@ public class CameraGoalController {
             });
             steps++;
 
-            m_focus.waitForChange(myGen, seqBefore, 450);
-            if (!m_focus.isCurrent(myGen)) {
-                synchronized (m_focus) {
+            m_focus.waitForChange(myGen, seqBefore, 280);
+            int posAfter;
+            synchronized (m_focus) {
+                if (!m_focus.isCurrent(myGen)) {
                     return buildResult(false, true, false, m_focus.v1, clampedTarget, steps);
                 }
+                posAfter = m_focus.v1;
+            }
+            // If focus moved opposite to commanded direction, user manually turned the focus ring -> abort
+            if ((dir == FOCUS_FAR && posAfter < current) || (dir == FOCUS_NEAR && posAfter > current)) {
+                JSONObject aborted = buildResult(false, true, false, posAfter, clampedTarget, steps);
+                aborted.put("manualOverride", true);
+                return aborted;
             }
             if (m_focus.getUpdateSeq() == seqBefore) {
                 stalled++;
-                if (stalled >= 6) {
+                if (stalled >= 12) {
                     synchronized (m_focus) {
                         return buildResult(false, false, true, m_focus.v1, clampedTarget, steps);
-                    }
-                }
-                // Brief preemptible cooldown before retrying when the lens ignored/missed a step
-                m_focus.waitForChange(myGen, seqBefore, 120);
-                if (!m_focus.isCurrent(myGen)) {
-                    synchronized (m_focus) {
-                        return buildResult(false, true, false, m_focus.v1, clampedTarget, steps);
                     }
                 }
             } else {
@@ -419,7 +416,7 @@ public class CameraGoalController {
         int stalled = 0;
         int steps = 0;
 
-        for (int i = 0; i < 60; i++) {
+        for (int i = 0; i < 80; i++) {
             int current;
             boolean has;
             synchronized (m_zoom) {

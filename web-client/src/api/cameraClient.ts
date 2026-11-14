@@ -211,6 +211,20 @@ export class CameraClient {
     );
   }
 
+  eventsStreamUrl(since = 0, cid?: string): string {
+    const params = new URLSearchParams({ since: String(since) });
+    if (cid) params.set('cid', cid);
+    return `${this.baseUrl}/api/events/stream?${params.toString()}`;
+  }
+
+  eventsCloseUrl(cid: string): string {
+    return `${this.baseUrl}/api/events/close?cid=${encodeURIComponent(cid)}`;
+  }
+
+  closeEventsStream(cid: string): void {
+    this.sendCloseBeacon(this.eventsCloseUrl(cid));
+  }
+
   async listPhotos(dir = '', limit = 100): Promise<PhotosResponse> {
     const params = new URLSearchParams();
     if (dir) params.set('dir', dir);
@@ -228,7 +242,10 @@ export class CameraClient {
   }
 
   closeLiveView(cid: string): void {
-    const url = this.liveViewCloseUrl(cid);
+    this.sendCloseBeacon(this.liveViewCloseUrl(cid));
+  }
+
+  private sendCloseBeacon(url: string): void {
     if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
       if (navigator.sendBeacon(url)) {
         return;

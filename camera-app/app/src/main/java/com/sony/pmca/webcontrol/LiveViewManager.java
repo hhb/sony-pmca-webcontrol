@@ -44,6 +44,7 @@ public class LiveViewManager {
     private byte[] m_latestJpeg;
     private byte[] m_lastCapturedJpeg;
     private long m_lastLiveviewFetchMs = 0;
+    private long m_lastFetchDurationMs = 0;
     private long m_frameSeq = 0;
     private final ArrayList<MjpegClient> m_mjpegClientList = new ArrayList<MjpegClient>(MAX_MJPEG_CLIENTS);
     private volatile boolean m_liveviewRunning = false;
@@ -272,6 +273,7 @@ public class LiveViewManager {
         }
 
         byte[] jpeg = null;
+        long fetchStart = System.currentTimeMillis();
         synchronized (m_captureLock) {
             if (m_cameraSequence == null) {
                 return;
@@ -309,12 +311,35 @@ public class LiveViewManager {
         }
 
         if (jpeg != null) {
+            long finishedAt = System.currentTimeMillis();
             synchronized (m_frameLock) {
                 m_latestJpeg = jpeg;
-                m_lastLiveviewFetchMs = System.currentTimeMillis();
+                m_lastLiveviewFetchMs = finishedAt;
+                m_lastFetchDurationMs = finishedAt - fetchStart;
                 m_frameSeq++;
                 m_frameLock.notifyAll();
             }
         }
+    }
+
+    public org.json.JSONObject getDebugStats() {
+        org.json.JSONObject obj = new org.json.JSONObject();
+        try {
+            synchronized (m_frameLock) {
+                obj.put("running", m_liveviewRunning);
+                obj.put("clientCount", m_mjpegClientList.size());
+                org.json.JSONArray clients = new org.json.JSONArray();
+                for (int i = 0; i < m_mjpegClientList.size(); i++) {
+                    clients.put(m_mjpegClientList.get(i).cid);
+                }
+                obj.put("clients", clients);
+                obj.put("frameSeq", m_frameSeq);
+                obj.put("lastFrameBytes", m_latestJpeg != null ? m_latestJpeg.length : 0);
+                obj.put("lastFetchDurationMs", m_lastFetchDurationMs);
+                obj.put("lastFetchAgeMs", m_lastLiveviewFetchMs > 0 ? (System.currentTimeMillis() - m_lastLiveviewFetchMs) : -1);
+            }
+        } catch (Throwable ignored) {
+        }
+        return obj;
     }
 }

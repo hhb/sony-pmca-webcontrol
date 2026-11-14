@@ -515,6 +515,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     @Override
     protected void onPause() {
         super.onPause();
+        com.github.ma1co.pmcademo.app.Logger.flush();
 
         if (m_httpServer != null) {
             try {

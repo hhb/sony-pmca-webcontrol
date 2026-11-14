@@ -5,13 +5,16 @@ import com.sony.scalar.hardware.CameraEx;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeoutException;
@@ -45,7 +48,19 @@ public class MacroHttpServer extends NanoHTTPD {
         }
     };
 
+    private static final int MAX_SSE_CLIENTS = 3;
+
+    private static final class SseClient {
+        final String cid;
+        volatile boolean closed = false;
+
+        SseClient(String cid) {
+            this.cid = cid;
+        }
+    }
+
     private final MacroServerActivity m_activity;
+    private final ArrayList<SseClient> m_sseClients = new ArrayList<SseClient>(MAX_SSE_CLIENTS);
 
     public MacroHttpServer(MacroServerActivity activity) {
         this(activity, DEFAULT_PORT);
@@ -54,6 +69,18 @@ public class MacroHttpServer extends NanoHTTPD {
     public MacroHttpServer(MacroServerActivity activity, int port) {
         super(port);
         m_activity = activity;
+    }
+
+    @Override
+    public void stop() {
+        synchronized (m_sseClients) {
+            for (int i = 0; i < m_sseClients.size(); i++) {
+                m_sseClients.get(i).closed = true;
+            }
+            m_sseClients.clear();
+        }
+        m_activity.getEventHub().wakeAll();
+        super.stop();
     }
 
     @Override
@@ -113,6 +140,24 @@ public class MacroHttpServer extends NanoHTTPD {
                 long since = parseLong(params.get("since"), 0L);
                 int timeout = parseInt(params.get("timeout"), 10);
                 JSONObject res = m_activity.getEventHub().waitForEvents(since, timeout);
+                return jsonOk(res.toString());
+            }
+
+            if ("/api/events/stream".equals(uri)) {
+                long since = parseLong(params.get("since"), -1L);
+                if (since < 0L) {
+                    since = parseLong(session.getHeaders().get("last-event-id"), 0L);
+                }
+                String cid = params.get("cid");
+                SseClient client = acquireSseClient(cid);
+                return new SseStreamResponse(client, since);
+            }
+
+            if ("/api/events/close".equals(uri)) {
+                String cid = params.get("cid");
+                boolean closed = closeSseClientByCid(cid);
+                JSONObject res = new JSONObject();
+                res.put("closed", closed);
                 return jsonOk(res.toString());
             }
 
@@ -177,12 +222,118 @@ public class MacroHttpServer extends NanoHTTPD {
                 return addCors(new Response(Response.Status.OK, MIME_PLAINTEXT, PhotoStorageHelper.getCrashLogText()));
             }
 
+            if ("/api/debug".equals(uri)) {
+                return jsonOk(buildDebugJson().toString());
+            }
+
+            if ("/api/bench".equals(uri)) {
+                long bytes = parseLong(params.get("bytes"), 1048576L);
+                if (bytes < 1L) bytes = 1L;
+                if (bytes > 10L * 1024L * 1024L) bytes = 10L * 1024L * 1024L;
+                Response res = new Response(Response.Status.OK, "application/octet-stream", new BenchInputStream(bytes));
+                res.addHeader("Cache-Control", "no-store");
+                return addCors(res);
+            }
+
             return jsonError(Response.Status.NOT_FOUND, "Unknown endpoint: " + uri);
         } catch (TimeoutException te) {
             return jsonError(STATUS_GATEWAY_TIMEOUT, te.getMessage());
         } catch (Throwable t) {
             Throwable cause = t.getCause() != null ? t.getCause() : t;
             return jsonError(Response.Status.INTERNAL_ERROR, cause.toString());
+        }
+    }
+
+    private JSONObject buildDebugJson() throws Exception {
+        JSONObject root = new JSONObject();
+        root.put("ok", true);
+        root.put("uptimeMs", android.os.SystemClock.uptimeMillis());
+        root.put("threads", Thread.activeCount());
+
+        Runtime rt = Runtime.getRuntime();
+        JSONObject mem = new JSONObject();
+        long total = rt.totalMemory();
+        long free = rt.freeMemory();
+        mem.put("usedBytes", total - free);
+        mem.put("freeBytes", free);
+        mem.put("totalBytes", total);
+        mem.put("maxBytes", rt.maxMemory());
+        root.put("memory", mem);
+
+        String loadavg = readSingleLine("/proc/loadavg");
+        if (loadavg != null) {
+            root.put("loadavg", loadavg);
+        }
+
+        long pingStart = System.currentTimeMillis();
+        try {
+            m_activity.runOnMainSync(new Callable<Void>() {
+                @Override
+                public Void call() {
+                    return null;
+                }
+            }, 2000L);
+            root.put("mainThreadPingMs", System.currentTimeMillis() - pingStart);
+            root.put("mainThreadBlocked", false);
+        } catch (TimeoutException te) {
+            root.put("mainThreadPingMs", System.currentTimeMillis() - pingStart);
+            root.put("mainThreadBlocked", true);
+        } catch (Throwable t) {
+            root.put("mainThreadPingError", t.toString());
+        }
+
+        root.put("liveview", m_activity.getLiveViewManager().getDebugStats());
+        root.put("eventSeq", m_activity.getEventHub().getStateSnapshot().optLong("seq", 0L));
+        return root;
+    }
+
+    private static String readSingleLine(String path) {
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader(path));
+            return br.readLine();
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (br != null) {
+                try { br.close(); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private static final class BenchInputStream extends InputStream {
+        private static final byte[] CHUNK = new byte[8192];
+        static {
+            for (int i = 0; i < CHUNK.length; i++) {
+                CHUNK[i] = (byte) (i & 0xFF);
+            }
+        }
+
+        private long m_remaining;
+
+        BenchInputStream(long totalBytes) {
+            m_remaining = totalBytes;
+        }
+
+        @Override
+        public int available() {
+            return (int) Math.min(m_remaining, CHUNK.length);
+        }
+
+        @Override
+        public int read() {
+            if (m_remaining <= 0) return -1;
+            m_remaining--;
+            return 0x55;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) {
+            if (m_remaining <= 0) return -1;
+            int toCopy = (int) Math.min(m_remaining, Math.min(len, CHUNK.length));
+            System.arraycopy(CHUNK, 0, b, off, toCopy);
+            m_remaining -= toCopy;
+            return toCopy;
         }
     }
 
@@ -294,6 +445,121 @@ public class MacroHttpServer extends NanoHTTPD {
                 // Client disconnected
             } finally {
                 m_activity.getLiveViewManager().releaseMjpegClient(m_client);
+            }
+        }
+    }
+
+    private SseClient acquireSseClient(String cid) {
+        String normalizedCid = (cid != null && !cid.trim().isEmpty()) ? cid.trim() : null;
+        SseClient client = new SseClient(normalizedCid);
+        boolean woke = false;
+        synchronized (m_sseClients) {
+            if (normalizedCid != null) {
+                for (int i = m_sseClients.size() - 1; i >= 0; i--) {
+                    SseClient existing = m_sseClients.get(i);
+                    if (normalizedCid.equals(existing.cid)) {
+                        existing.closed = true;
+                        m_sseClients.remove(i);
+                        woke = true;
+                    }
+                }
+            }
+            while (m_sseClients.size() >= MAX_SSE_CLIENTS) {
+                SseClient oldest = m_sseClients.remove(0);
+                oldest.closed = true;
+                woke = true;
+            }
+            m_sseClients.add(client);
+        }
+        if (woke) {
+            m_activity.getEventHub().wakeAll();
+        }
+        return client;
+    }
+
+    private boolean closeSseClientByCid(String cid) {
+        if (cid == null || cid.trim().isEmpty()) return false;
+        String target = cid.trim();
+        boolean closedAny = false;
+        synchronized (m_sseClients) {
+            for (int i = m_sseClients.size() - 1; i >= 0; i--) {
+                SseClient c = m_sseClients.get(i);
+                if (target.equals(c.cid)) {
+                    c.closed = true;
+                    m_sseClients.remove(i);
+                    closedAny = true;
+                }
+            }
+        }
+        if (closedAny) {
+            m_activity.getEventHub().wakeAll();
+        }
+        return closedAny;
+    }
+
+    private void releaseSseClient(SseClient client) {
+        synchronized (m_sseClients) {
+            client.closed = true;
+            m_sseClients.remove(client);
+        }
+    }
+
+    private class SseStreamResponse extends Response {
+        private final SseClient m_client;
+        private long m_since;
+
+        SseStreamResponse(SseClient client, long since) {
+            super(Status.OK, "text/event-stream; charset=utf-8", "");
+            m_client = client;
+            m_since = since;
+        }
+
+        @Override
+        protected void send(OutputStream outputStream) {
+            try {
+                String headers = "HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: text/event-stream; charset=utf-8\r\n"
+                        + "Cache-Control: no-cache, no-store\r\n"
+                        + "Connection: close\r\n"
+                        + "Access-Control-Allow-Origin: *\r\n"
+                        + "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                        + "Access-Control-Allow-Headers: Content-Type\r\n\r\n"
+                        + "retry: 2000\n\n";
+                outputStream.write(headers.getBytes("UTF-8"));
+                outputStream.flush();
+
+                CameraEventHub hub = m_activity.getEventHub();
+                while (!m_client.closed) {
+                    JSONObject batch = hub.waitForEvents(m_since, 8);
+                    if (m_client.closed) {
+                        break;
+                    }
+                    JSONArray events = batch.optJSONArray("events");
+                    if (events != null && events.length() > 0) {
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < events.length(); i++) {
+                            JSONObject ev = events.optJSONObject(i);
+                            if (ev == null) continue;
+                            long seq = ev.optLong("seq", m_since);
+                            if (seq > m_since) {
+                                m_since = seq;
+                            }
+                            sb.append("id: ").append(seq).append('\n');
+                            sb.append("data: ").append(ev.toString()).append("\n\n");
+                        }
+                        if (sb.length() > 0) {
+                            outputStream.write(sb.toString().getBytes("UTF-8"));
+                            outputStream.flush();
+                        }
+                    } else {
+                        outputStream.write(": ping\n\n".getBytes("UTF-8"));
+                        outputStream.flush();
+                    }
+                }
+            } catch (IOException ignored) {
+                // Client disconnected
+            } finally {
+                releaseSseClient(m_client);
             }
         }
     }
