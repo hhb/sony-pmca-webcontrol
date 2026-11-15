@@ -135,6 +135,7 @@ export function App() {
     }
   });
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const [measuredStep, setMeasuredStep] = useState<{ step: number; seq: number } | null>(null);
 
   const seqRef = useRef<number>(0);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
@@ -538,6 +539,9 @@ export function App() {
               onCapture={handleCapture}
               capturing={Boolean(state?.capturing)}
               previewMagnification={state?.previewMagnification}
+              currentFocus={state?.focus?.currentPosition}
+              maxFocus={state?.focus?.maxPosition}
+              onMeasuredStep={(step) => setMeasuredStep({ step, seq: Date.now() })}
               onError={setErrorMsg}
             />
             <div className="side-column">
@@ -565,6 +569,7 @@ export function App() {
                   } catch {}
                 }}
                 mergeStatus={mergeStatus}
+                measuredStep={measuredStep}
                 onStackSessionStart={handleStackSessionStart}
                 onStackSessionEnd={handleStackSessionEnd}
               />

@@ -26,6 +26,7 @@ export function ExposureControl({
   const [localEvIndex, setLocalEvIndex] = useState<number | null>(null);
   const [localIso, setLocalIso] = useState<number | null>(null);
   const [isoOptions, setIsoOptions] = useState<number[]>(ISO_PRESETS);
+  const [sceneMode, setSceneMode] = useState<string | null>(null);
 
   const ec = typeof state?.exposureCompensation === 'object' ? state.exposureCompensation : undefined;
   const stateEvIndex =
@@ -44,9 +45,18 @@ export function ExposureControl({
     if (!connected) {
       setLocalEvIndex(null);
       setLocalIso(null);
+      setSceneMode(null);
       return;
     }
     let cancelled = false;
+    client
+      .getSceneMode()
+      .then((mode) => {
+        if (!cancelled && typeof mode === 'string') {
+          setSceneMode(mode);
+        }
+      })
+      .catch(() => {});
     client
       .getExposureCompensation()
       .then((val) => {
@@ -112,6 +122,42 @@ export function ExposureControl({
     }
   };
 
+  const autoAperture =
+    sceneMode === 'shutter-speed' || sceneMode === 'program-auto' || sceneMode === 'auto';
+  const autoShutter =
+    sceneMode === 'aperture-priority' || sceneMode === 'program-auto' || sceneMode === 'auto';
+
+  const modeBadge =
+    sceneMode === 'manual-exposure'
+      ? 'M'
+      : sceneMode === 'aperture-priority'
+        ? 'A'
+        : sceneMode === 'shutter-speed'
+          ? 'S'
+          : sceneMode === 'program-auto'
+            ? 'P'
+            : sceneMode;
+
+  const setExposureAutoFlags = async (nextAutoAperture: boolean, nextAutoShutter: boolean) => {
+    const targetMode = nextAutoAperture
+      ? nextAutoShutter
+        ? 'program-auto'
+        : 'shutter-speed'
+      : nextAutoShutter
+        ? 'aperture-priority'
+        : 'manual-exposure';
+    const prev = sceneMode;
+    setSceneMode(targetMode);
+    try {
+      await client.setSceneMode(targetMode);
+      const actual = await client.getSceneMode();
+      setSceneMode(actual);
+    } catch (err) {
+      setSceneMode(prev);
+      throw err;
+    }
+  };
+
   const aperture = formatAperture(state?.aperture?.currentAperture);
   const shutter = formatShutter(
     state?.shutter?.currentShutterSpeed_n,
@@ -129,9 +175,12 @@ export function ExposureControl({
             <span className="muted-tag">{state.lens.LensName}</span>
           )}
         </div>
-        {typeof state?.focalLength === 'number' && state.focalLength > 0 && (
-          <span className="badge">{Math.round(state.focalLength / 10)}mm</span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {modeBadge && <span className="badge">{modeBadge}</span>}
+          {typeof state?.focalLength === 'number' && state.focalLength > 0 && (
+            <span className="badge">{Math.round(state.focalLength / 10)}mm</span>
+          )}
+        </div>
       </div>
 
       <div className="exposure-grid">
@@ -142,7 +191,7 @@ export function ExposureControl({
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy}
+              disabled={!connected || busy || autoAperture}
               onClick={() => runAction(() => client.decrementAperture())}
               title="Wider aperture (lower F-number)"
             >
@@ -151,13 +200,24 @@ export function ExposureControl({
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy}
+              disabled={!connected || busy || autoAperture}
               onClick={() => runAction(() => client.incrementAperture())}
               title="Narrower aperture (higher F-number)"
             >
               F+
             </button>
           </div>
+          <label className="checkbox-row" style={{ marginTop: 6 }}>
+            <input
+              type="checkbox"
+              disabled={!connected || busy}
+              checked={autoAperture}
+              onChange={(e) =>
+                void runAction(() => setExposureAutoFlags(e.target.checked, autoShutter))
+              }
+            />
+            <span>Auto</span>
+          </label>
         </div>
 
         <div className="metric-card">
@@ -167,7 +227,7 @@ export function ExposureControl({
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy}
+              disabled={!connected || busy || autoShutter}
               onClick={() => runAction(() => client.decrementShutter())}
               title="Slower shutter"
             >
@@ -176,13 +236,24 @@ export function ExposureControl({
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy}
+              disabled={!connected || busy || autoShutter}
               onClick={() => runAction(() => client.incrementShutter())}
               title="Faster shutter"
             >
               Faster
             </button>
           </div>
+          <label className="checkbox-row" style={{ marginTop: 6 }}>
+            <input
+              type="checkbox"
+              disabled={!connected || busy}
+              checked={autoShutter}
+              onChange={(e) =>
+                void runAction(() => setExposureAutoFlags(autoAperture, e.target.checked))
+              }
+            />
+            <span>Auto</span>
+          </label>
         </div>
 
         <div className="metric-card">

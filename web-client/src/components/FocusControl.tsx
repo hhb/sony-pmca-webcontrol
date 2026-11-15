@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
@@ -18,6 +18,7 @@ interface FocusControlProps {
   autoMerge: boolean;
   onAutoMergeChange: (checked: boolean) => void;
   mergeStatus?: string | null;
+  measuredStep?: { step: number; seq: number } | null;
   onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
   onStackSessionEnd?: (
     baseName: string,
@@ -44,6 +45,7 @@ export function FocusControl({
   autoMerge,
   onAutoMergeChange,
   mergeStatus,
+  measuredStep,
   onStackSessionStart,
   onStackSessionEnd,
 }: FocusControlProps) {
@@ -54,6 +56,12 @@ export function FocusControl({
   const [stepInput, setStepInput] = useState<string>('4');
   const [settleInput, setSettleInput] = useState<string>('400');
   const [stackStatus, setStackStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!measuredStep) return;
+    setStepInput(String(measuredStep.step));
+    setStackStatus(`Measured step: ${measuredStep.step}`);
+  }, [measuredStep]);
   const [targetFocus, setTargetFocus] = useState<number | null>(null);
   const targetFocusRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);

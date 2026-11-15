@@ -310,6 +310,14 @@ export class CameraClient {
     return this.call('params', 'setExposureCompensation', [index]);
   }
 
+  getSceneMode(): Promise<string> {
+    return this.call<string>('params', 'getSceneMode');
+  }
+
+  setSceneMode(mode: string): Promise<unknown> {
+    return this.call('params', 'setSceneMode', [mode]);
+  }
+
   async zoomStep(direction: 0 | 1, speed = 1): Promise<void> {
     await this.call('camera', 'startZoom', [direction, speed]);
     await new Promise((r) => setTimeout(r, 90));

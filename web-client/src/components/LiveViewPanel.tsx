@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CameraClient, CameraState } from '../api/cameraClient';
+import {
+  computeMaskOverlap,
+  computeRoiSharpness,
+  isBaselineTextured,
+} from '../api/stepMeasure';
 
 interface LiveViewPanelProps {
   client: CameraClient;
@@ -7,6 +12,9 @@ interface LiveViewPanelProps {
   onCapture: () => void;
   capturing: boolean;
   previewMagnification?: CameraState['previewMagnification'];
+  currentFocus?: number;
+  maxFocus?: number;
+  onMeasuredStep?: (step: number) => void;
   onError?: (msg: string | null) => void;
 }
 
@@ -28,6 +36,9 @@ export function LiveViewPanel({
   onCapture,
   capturing,
   previewMagnification,
+  currentFocus,
+  maxFocus,
+  onMeasuredStep,
   onError,
 }: LiveViewPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -40,9 +51,10 @@ export function LiveViewPanel({
   const [showGrid, setShowGrid] = useState(true);
   const [peaking, setPeaking] = useState(false);
   const [showHistogram, setShowHistogram] = useState(false);
-  const [toolMode, setToolMode] = useState<'focus' | 'magnify'>('focus');
+  const [toolMode, setToolMode] = useState<'focus' | 'magnify' | 'measure'>('focus');
   const [afStatus, setAfStatus] = useState<'idle' | 'focusing' | 'ok' | 'fail'>('idle');
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const [measureStatus, setMeasureStatus] = useState<string | null>(null);
   const [autoResetSec, setAutoResetSec] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('pmca_mag_auto_reset_sec');
@@ -75,6 +87,14 @@ export function LiveViewPanel({
   const liveViewCidRef = useRef<string>(getLiveViewClientId());
   const afTimerRef = useRef<number | null>(null);
   const magResetTimerRef = useRef<number | null>(null);
+  const measureBoxRef = useRef<{ x: number; y: number; w: number; h: number; label: string } | null>(null);
+  const measureTimerRef = useRef<number | null>(null);
+  const measureAbortRef = useRef<AbortController | null>(null);
+  const cleanFrameWaiterRef = useRef<{
+    roi: { x: number; y: number; w: number; h: number };
+    resolve: (img: ImageData) => void;
+    reject: (err: Error) => void;
+  } | null>(null);
 
   const clearMagResetTimer = () => {
     if (magResetTimerRef.current !== null) {
@@ -116,6 +136,10 @@ export function LiveViewPanel({
       if (magResetTimerRef.current !== null) {
         window.clearTimeout(magResetTimerRef.current);
       }
+      if (measureTimerRef.current !== null) {
+        window.clearTimeout(measureTimerRef.current);
+      }
+      measureAbortRef.current?.abort();
     };
   }, []);
 
@@ -205,7 +229,8 @@ export function LiveViewPanel({
               canvas.width = targetW;
               canvas.height = targetH;
             }
-            const needPixels = peakingRef.current || showHistogramRef.current;
+            const needPixels =
+              peakingRef.current || showHistogramRef.current || cleanFrameWaiterRef.current !== null;
             const ctx = canvas.getContext('2d', { willReadFrequently: needPixels });
             if (ctx) {
               if (deg === 0) {
@@ -218,7 +243,17 @@ export function LiveViewPanel({
                 ctx.restore();
               }
 
-              if (needPixels) {
+              const waiter = cleanFrameWaiterRef.current;
+              if (waiter) {
+                cleanFrameWaiterRef.current = null;
+                const rx = Math.max(0, Math.min(canvas.width - 1, waiter.roi.x));
+                const ry = Math.max(0, Math.min(canvas.height - 1, waiter.roi.y));
+                const rw = Math.max(12, Math.min(canvas.width - rx, waiter.roi.w));
+                const rh = Math.max(12, Math.min(canvas.height - ry, waiter.roi.h));
+                waiter.resolve(ctx.getImageData(rx, ry, rw, rh));
+              }
+
+              if (peakingRef.current || showHistogramRef.current) {
                 const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imgData.data;
 
@@ -248,6 +283,11 @@ export function LiveViewPanel({
                   72,
                   label,
                 );
+              }
+
+              if (measureBoxRef.current) {
+                const m = measureBoxRef.current;
+                drawFocusBox(ctx, m.x, m.y, m.w, m.h, m.label, '#58a6ff');
               }
 
               if (showGridRef.current) {
@@ -397,6 +437,133 @@ export function LiveViewPanel({
       normY = dispX;
     }
 
+    const captureCleanRoi = (
+      roi: { x: number; y: number; w: number; h: number },
+      signal: AbortSignal,
+    ): Promise<ImageData> =>
+      new Promise((resolve, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        const onAbort = () => {
+          window.clearTimeout(timer);
+          if (cleanFrameWaiterRef.current?.resolve === wrappedResolve) {
+            cleanFrameWaiterRef.current = null;
+          }
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        const wrappedResolve = (img: ImageData) => {
+          window.clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          resolve(img);
+        };
+        const timer = window.setTimeout(() => {
+          signal.removeEventListener('abort', onAbort);
+          if (cleanFrameWaiterRef.current?.resolve === wrappedResolve) {
+            cleanFrameWaiterRef.current = null;
+          }
+          reject(new Error('Timed out waiting for LiveView frame'));
+        }, 2000);
+        signal.addEventListener('abort', onAbort, { once: true });
+        cleanFrameWaiterRef.current = { roi, resolve: wrappedResolve, reject };
+      });
+
+    if (toolMode === 'measure') {
+      if (measureAbortRef.current) {
+        measureAbortRef.current.abort();
+        return;
+      }
+      if (typeof currentFocus !== 'number' || typeof maxFocus !== 'number' || maxFocus <= 0) {
+        onError?.('Focus position unavailable (switch to MF / AF-capable lens)');
+        return;
+      }
+      if (measureTimerRef.current !== null) {
+        window.clearTimeout(measureTimerRef.current);
+        measureTimerRef.current = null;
+      }
+
+      const startPos = currentFocus;
+      const boxSize = 120;
+      const roi = {
+        x: Math.round(clickX - boxSize / 2),
+        y: Math.round(clickY - boxSize / 2),
+        w: boxSize,
+        h: boxSize,
+      };
+      const controller = new AbortController();
+      measureAbortRef.current = controller;
+      measureBoxRef.current = { x: clickX, y: clickY, w: boxSize, h: boxSize, label: 'Measuring...' };
+      setMeasureStatus('Measuring...');
+
+      try {
+        const baseImg = await captureCleanRoi(roi, controller.signal);
+        const baseline = computeRoiSharpness(baseImg);
+        if (!isBaselineTextured(baseline)) {
+          measureBoxRef.current = null;
+          setMeasureStatus(null);
+          onError?.('Selected region is out of focus or lacks texture. Focus on a textured sloped area first.');
+          return;
+        }
+
+        const MAX_PROBE = 15;
+        const dir = startPos + MAX_PROBE <= maxFocus ? 1 : -1;
+        let foundDelta: number | null = null;
+        for (let delta = 1; delta <= MAX_PROBE; delta++) {
+          if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          const nextPos = Math.max(0, Math.min(maxFocus, startPos + dir * delta));
+          if (nextPos === startPos && delta > 1) break;
+          await client.gotoFocus(nextPos, 0, controller.signal);
+          await new Promise((r) => window.setTimeout(r, 180));
+          const probeImg = await captureCleanRoi(roi, controller.signal);
+          const probeSharp = computeRoiSharpness(probeImg, baseline.maxEnergy);
+          const overlap = computeMaskOverlap(baseline, probeSharp);
+          const pct = Math.round(overlap * 100);
+          measureBoxRef.current = {
+            x: clickX,
+            y: clickY,
+            w: boxSize,
+            h: boxSize,
+            label: `+${delta} · ${pct}%`,
+          };
+          setMeasureStatus(`+${delta} (${pct}%)`);
+          if (overlap <= 0.3) {
+            foundDelta = delta;
+            break;
+          }
+        }
+
+        const rawStep = foundDelta ?? MAX_PROBE;
+        const recommended = Math.max(1, Math.round(rawStep * 0.7));
+        onMeasuredStep?.(recommended);
+        measureBoxRef.current = {
+          x: clickX,
+          y: clickY,
+          w: boxSize,
+          h: boxSize,
+          label: `Step: ${recommended}`,
+        };
+        setMeasureStatus(`Step: ${recommended}`);
+        measureTimerRef.current = window.setTimeout(() => {
+          measureBoxRef.current = null;
+          setMeasureStatus(null);
+          measureTimerRef.current = null;
+        }, 3000);
+      } catch (err) {
+        measureBoxRef.current = null;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          setMeasureStatus(null);
+        } else {
+          setMeasureStatus(null);
+          onError?.(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        measureAbortRef.current = null;
+        await client.gotoFocus(startPos, 0).catch(() => {});
+      }
+      return;
+    }
+
     if (toolMode === 'focus') {
       clearAfTimer();
       setFocusPoint({ x: clickX, y: clickY });
@@ -498,7 +665,13 @@ export function LiveViewPanel({
           className="liveview-canvas"
           style={{ cursor: 'crosshair' }}
           onClick={(e) => void handleCanvasClick(e)}
-          title={toolMode === 'focus' ? 'Click image to autofocus here' : 'Click image to magnify here'}
+          title={
+            toolMode === 'focus'
+              ? 'Click image to autofocus here'
+              : toolMode === 'magnify'
+                ? 'Click image to magnify here'
+                : 'Click a textured sloped area to measure focus step'
+          }
         />
         {showHistogram && connected && streaming && !frameError && (
           <canvas
@@ -551,6 +724,15 @@ export function LiveViewPanel({
           </button>
           <button
             type="button"
+            className={`btn btn-sm ${toolMode === 'measure' ? 'btn-active' : ''}`}
+            disabled={!connected || typeof currentFocus !== 'number' || typeof maxFocus !== 'number'}
+            onClick={() => setToolMode('measure')}
+            title="Click a textured sloped region to auto-measure focus stack step"
+          >
+            📏 Measure Step
+          </button>
+          <button
+            type="button"
             className="btn btn-sm"
             disabled={!connected || !magEnabled}
             onClick={() => {
@@ -583,6 +765,7 @@ export function LiveViewPanel({
         </div>
         <div className="toolbar-row" style={{ gap: 6 }}>
           <span className="badge">{magLabel}</span>
+          {measureStatus && <span className="badge">{measureStatus}</span>}
           {afStatus !== 'idle' && (
             <span className="badge">
               {afStatus === 'focusing' ? 'AF...' : afStatus === 'ok' ? 'AF OK' : 'AF Fail'}
@@ -678,6 +861,7 @@ function drawFocusBox(
   boxW: number,
   boxH: number,
   zoomText: string,
+  color = '#7ee787',
 ) {
   ctx.save();
   const left = cx - boxW / 2;
@@ -686,7 +870,7 @@ function drawFocusBox(
   // Box border with outer glow
   ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
   ctx.shadowBlur = 4;
-  ctx.strokeStyle = '#7ee787';
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
   ctx.strokeRect(left, top, boxW, boxH);
 
@@ -723,10 +907,11 @@ function drawFocusBox(
   ctx.stroke();
 
   // Badge label above box
-  ctx.fillStyle = 'rgba(13, 17, 23, 0.8)';
-  ctx.fillRect(left, Math.max(0, top - 16), 34, 14);
-  ctx.fillStyle = '#7ee787';
   ctx.font = 'bold 10px monospace';
+  const labelW = Math.max(34, Math.ceil(ctx.measureText(zoomText).width) + 8);
+  ctx.fillStyle = 'rgba(13, 17, 23, 0.8)';
+  ctx.fillRect(left, Math.max(0, top - 16), labelW, 14);
+  ctx.fillStyle = color;
   ctx.fillText(zoomText, left + 4, Math.max(11, top - 5));
 
   ctx.restore();
