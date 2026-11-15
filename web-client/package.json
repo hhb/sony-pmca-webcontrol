@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:camera": "tsc -b && VITE_CAMERA_EMBEDDED=true vite build --outDir ../camera-app/app/src/main/assets --emptyOutDir false && gzip -9 -c ../camera-app/app/src/main/assets/index.html > ../camera-app/app/src/main/assets/index.html.gzip && rm -f ../camera-app/app/src/main/assets/index.html ../camera-app/app/src/main/assets/index.html.gz",
     "preview": "vite preview"
   },
   "dependencies": {

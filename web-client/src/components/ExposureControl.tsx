@@ -200,11 +200,12 @@ export function ExposureControl({
           <div className="metric-header-row">
             <span className="metric-label">Aperture</span>
             <span className="metric-value metric-value-inline">{aperture}</span>
-            <label className="metric-auto-toggle">
+            <label className="metric-auto-toggle" title="Toggle automatic aperture">
               <input
                 type="checkbox"
                 disabled={!connected || busy}
                 checked={autoAperture}
+                aria-label="Auto aperture"
                 onChange={(e) =>
                   void runAction(() => setExposureAutoFlags(e.target.checked, autoShutter))
                 }
@@ -219,6 +220,7 @@ export function ExposureControl({
               disabled={!connected || busy || autoAperture}
               onClick={() => runAction(() => client.decrementAperture())}
               title="Wider aperture (lower F-number)"
+              aria-label="Wider aperture (F-)"
             >
               F-
             </button>
@@ -228,6 +230,7 @@ export function ExposureControl({
               disabled={!connected || busy || autoAperture}
               onClick={() => runAction(() => client.incrementAperture())}
               title="Narrower aperture (higher F-number)"
+              aria-label="Narrower aperture (F+)"
             >
               F+
             </button>
@@ -238,11 +241,12 @@ export function ExposureControl({
           <div className="metric-header-row">
             <span className="metric-label">Shutter</span>
             <span className="metric-value metric-value-inline">{shutter}</span>
-            <label className="metric-auto-toggle">
+            <label className="metric-auto-toggle" title="Toggle automatic shutter speed">
               <input
                 type="checkbox"
                 disabled={!connected || busy}
                 checked={autoShutter}
+                aria-label="Auto shutter speed"
                 onChange={(e) =>
                   void runAction(() => setExposureAutoFlags(autoAperture, e.target.checked))
                 }
@@ -257,6 +261,7 @@ export function ExposureControl({
               disabled={!connected || busy || autoShutter}
               onClick={() => runAction(() => client.decrementShutter())}
               title="Slower shutter"
+              aria-label="Slower shutter (S-)"
             >
               S-
             </button>
@@ -266,6 +271,7 @@ export function ExposureControl({
               disabled={!connected || busy || autoShutter}
               onClick={() => runAction(() => client.incrementShutter())}
               title="Faster shutter"
+              aria-label="Faster shutter (S+)"
             >
               S+
             </button>
@@ -281,6 +287,8 @@ export function ExposureControl({
             style={{ width: '100%' }}
             disabled={!connected || busy}
             value={isoValue ?? ''}
+            title="Select ISO sensitivity (or AUTO)"
+            aria-label="ISO sensitivity"
             onChange={(e) => {
               const val = Number(e.target.value);
               if (!Number.isNaN(val)) {
@@ -313,6 +321,7 @@ export function ExposureControl({
                     ? 'EV compensation has no effect without Auto Aperture, Shutter, or ISO'
                     : 'Reset EV to ±0.0'
                 }
+                aria-label="Reset exposure compensation to 0"
                 disabled={evDisabled}
               >
                 Reset
@@ -330,6 +339,7 @@ export function ExposureControl({
                   ? 'EV compensation requires Aperture, Shutter, or ISO set to Auto'
                   : 'Decrease exposure compensation (-1/3 EV)'
               }
+              aria-label="Decrease exposure compensation (-1/3 EV)"
             >
               -
             </button>
@@ -343,6 +353,7 @@ export function ExposureControl({
                   ? 'EV compensation requires Aperture, Shutter, or ISO set to Auto'
                   : 'Increase exposure compensation (+1/3 EV)'
               }
+              aria-label="Increase exposure compensation (+1/3 EV)"
             >
               +
             </button>

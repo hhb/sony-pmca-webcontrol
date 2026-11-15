@@ -17,6 +17,7 @@ interface FocusControlProps {
   openFocusReason: string;
   autoMerge: boolean;
   onAutoMergeChange: (checked: boolean) => void;
+  hideAutoMerge?: boolean;
   mergeStatus?: string | null;
   measuredStep?: { step: number; seq: number } | null;
   onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
@@ -45,6 +46,7 @@ export function FocusControl({
   openFocusReason,
   autoMerge,
   onAutoMergeChange,
+  hideAutoMerge = false,
   mergeStatus,
   measuredStep,
   onStackSessionStart,
@@ -133,6 +135,27 @@ export function FocusControl({
     void moveFocusTo(base + delta);
   };
 
+  const zoomPressRef = useRef<{
+    active: boolean;
+    holding: boolean;
+    timerId: number | null;
+  }>({ active: false, holding: false, timerId: null });
+
+  useEffect(() => {
+    return () => {
+      const press = zoomPressRef.current;
+      if (press.timerId !== null) {
+        window.clearTimeout(press.timerId);
+        press.timerId = null;
+      }
+      if (press.holding) {
+        press.holding = false;
+        void client.stopZoom().catch(() => {});
+      }
+      press.active = false;
+    };
+  }, [client]);
+
   const stepZoom = async (dir: 0 | 1) => {
     setBusy(true);
     try {
@@ -141,6 +164,50 @@ export function FocusControl({
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleZoomPointerDown = (dir: 0 | 1, e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!connected || busy) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    const press = zoomPressRef.current;
+    if (press.timerId !== null) {
+      window.clearTimeout(press.timerId);
+    }
+    press.active = true;
+    press.holding = false;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+
+    press.timerId = window.setTimeout(() => {
+      press.timerId = null;
+      if (!press.active) return;
+      press.holding = true;
+      void client.startZoom(dir, 1).catch((err) => {
+        onError(err instanceof Error ? err.message : String(err));
+      });
+    }, 400);
+  };
+
+  const handleZoomPointerEnd = (dir: 0 | 1) => {
+    const press = zoomPressRef.current;
+    if (press.timerId !== null) {
+      window.clearTimeout(press.timerId);
+      press.timerId = null;
+    }
+    if (!press.active) return;
+    const wasHolding = press.holding;
+    press.active = false;
+    press.holding = false;
+
+    if (wasHolding) {
+      void client.stopZoom().catch((err) => {
+        onError(err instanceof Error ? err.message : String(err));
+      });
+    } else {
+      void stepZoom(dir);
     }
   };
 
@@ -235,22 +302,29 @@ export function FocusControl({
         </div>
         {state?.powerZoom && (
           <div className="toolbar-row">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!connected || busy}
-              onClick={() => stepZoom(ZOOM_WIDE)}
-            >
-              Zoom -
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!connected || busy}
-              onClick={() => stepZoom(ZOOM_TELE)}
-            >
-              Zoom +
-            </button>
+            {(
+              [
+                { dir: ZOOM_WIDE as 0 | 1, label: 'Zoom -', hint: 'Zoom wide (tap for 1 step, hold for continuous zoom)' },
+                { dir: ZOOM_TELE as 0 | 1, label: 'Zoom +', hint: 'Zoom tele (tap for 1 step, hold for continuous zoom)' },
+              ]
+            ).map(({ dir, label, hint }) => (
+              <button
+                key={label}
+                type="button"
+                className="btn btn-sm"
+                disabled={!connected || busy}
+                title={hint}
+                aria-label={hint}
+                onPointerDown={(e) => handleZoomPointerDown(dir, e)}
+                onPointerUp={() => handleZoomPointerEnd(dir)}
+                onPointerCancel={() => handleZoomPointerEnd(dir)}
+                onClick={(e) => {
+                  if (e.detail === 0) void stepZoom(dir);
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -303,7 +377,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(-20)}
-          title="Near (-20)"
+          title="Focus Near (-20)"
+          aria-label="Focus Near (-20)"
         >
           &laquo;&laquo; Near
         </button>
@@ -312,7 +387,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(-5)}
-          title="Near (-5)"
+          title="Focus Near (-5)"
+          aria-label="Focus Near (-5)"
         >
           &laquo;
         </button>
@@ -321,7 +397,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(-1)}
-          title="Near (-1)"
+          title="Focus Near (-1)"
+          aria-label="Focus Near (-1)"
         >
           &lsaquo;
         </button>
@@ -330,7 +407,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(1)}
-          title="Far (+1)"
+          title="Focus Far (+1)"
+          aria-label="Focus Far (+1)"
         >
           &rsaquo;
         </button>
@@ -339,7 +417,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(5)}
-          title="Far (+5)"
+          title="Focus Far (+5)"
+          aria-label="Focus Far (+5)"
         >
           &raquo;
         </button>
@@ -348,7 +427,8 @@ export function FocusControl({
           className="btn"
           disabled={!canDragFocus || typeof currentFocus !== 'number'}
           onClick={() => stepFocus(20)}
-          title="Far (+20)"
+          title="Focus Far (+20)"
+          aria-label="Focus Far (+20)"
         >
           Far &raquo;&raquo;
         </button>
@@ -365,12 +445,16 @@ export function FocusControl({
               value={startPos}
               onChange={(e) => setStartPos(e.target.value)}
               placeholder="pos"
+              aria-label="Focus stack Start A position"
+              title="Start A focus position"
             />
             <button
               type="button"
               className="btn btn-sm"
               disabled={typeof currentFocus !== 'number'}
               onClick={() => setStartPos(String(currentFocus ?? ''))}
+              title="Set Start A to current focus position"
+              aria-label="Set Start A to current focus position"
             >
               Set
             </button>
@@ -384,12 +468,16 @@ export function FocusControl({
               value={endPos}
               onChange={(e) => setEndPos(e.target.value)}
               placeholder="pos"
+              aria-label="Focus stack End B position"
+              title="End B focus position"
             />
             <button
               type="button"
               className="btn btn-sm"
               disabled={typeof currentFocus !== 'number'}
               onClick={() => setEndPos(String(currentFocus ?? ''))}
+              title="Set End B to current focus position"
+              aria-label="Set End B to current focus position"
             >
               Set
             </button>
@@ -405,6 +493,8 @@ export function FocusControl({
               value={stepInput}
               placeholder="4"
               onChange={(e) => setStepInput(e.target.value)}
+              aria-label="Focus stack step size"
+              title="Focus step size between shots"
             />
             <span className="muted-tag">
               {plannedShots !== null ? `${plannedShots} shots` : '-- shots'}
@@ -422,30 +512,34 @@ export function FocusControl({
               value={settleInput}
               placeholder="400"
               onChange={(e) => setSettleInput(e.target.value)}
+              aria-label="Focus stack settle delay in milliseconds"
+              title="Wait time in milliseconds after moving focus before shooting"
             />
           </div>
         </div>
 
         <div className="stack-actions" style={{ flexWrap: 'wrap' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 'auto' }}>
-            <label className={`checkbox-row ${!openFocusAvailable ? 'is-disabled' : ''}`}>
-              <input
-                type="checkbox"
-                disabled={!openFocusAvailable || stackRunning}
-                checked={openFocusAvailable && autoMerge}
-                onChange={(e) => onAutoMergeChange(e.target.checked)}
-              />
-              <span>Auto Merge</span>
-            </label>
-            {!openFocusAvailable && (
-              <span className="info-tooltip-wrap">
-                <span className="info-icon" tabIndex={0} aria-label={openFocusReason}>
-                  i
+          {!hideAutoMerge && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 'auto' }}>
+              <label className={`checkbox-row ${!openFocusAvailable ? 'is-disabled' : ''}`}>
+                <input
+                  type="checkbox"
+                  disabled={!openFocusAvailable || stackRunning}
+                  checked={openFocusAvailable && autoMerge}
+                  onChange={(e) => onAutoMergeChange(e.target.checked)}
+                />
+                <span>Auto Merge</span>
+              </label>
+              {!openFocusAvailable && (
+                <span className="info-tooltip-wrap">
+                  <span className="info-icon" tabIndex={0} aria-label={openFocusReason}>
+                    i
+                  </span>
+                  <span className="info-tooltip-bubble">{openFocusReason}</span>
                 </span>
-                <span className="info-tooltip-bubble">{openFocusReason}</span>
-              </span>
-            )}
-          </div>
+              )}
+            </div>
+          )}
           {(mergeStatus || stackStatus) && (
             <span className="muted-tag">
               {mergeStatus ?? stackStatus}

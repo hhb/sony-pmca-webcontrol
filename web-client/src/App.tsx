@@ -144,10 +144,11 @@ export function App() {
   activeUrlRef.current = activeUrl;
 
   useEffect(() => {
+    if (__CAMERA_EMBEDDED__) return;
     void fetchHostCapabilities().then(setHostCaps);
   }, []);
   const autoSaveRef = useRef<boolean>(false);
-  autoSaveRef.current = hostCaps.backend && autoSaveEnabled;
+  autoSaveRef.current = !__CAMERA_EMBEDDED__ && hostCaps.backend && autoSaveEnabled;
 
   const refreshState = useCallback(async () => {
     try {
@@ -236,6 +237,7 @@ export function App() {
 
   const handleCaptureEvent = useCallback(
     (ev: CameraEvent) => {
+      if (__CAMERA_EMBEDDED__) return;
       if (ev.type !== 'Jpeg') return;
 
       const dedupKey = `jpeg_${ev.seq}`;
@@ -565,18 +567,22 @@ export function App() {
           {wifiLabel && <span className="muted-tag">{wifiLabel}</span>}
         </div>
 
-        <form className="connect-form" onSubmit={handleConnectSubmit}>
-          <input
-            type="text"
-            className="input-text url-input"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="http://192.168.0.250:8080"
-          />
-          <button type="submit" className="btn btn-primary btn-sm">
-            Connect
-          </button>
-        </form>
+        {!__CAMERA_EMBEDDED__ && (
+          <form className="connect-form" onSubmit={handleConnectSubmit}>
+            <input
+              type="text"
+              className="input-text url-input"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="http://192.168.0.250:8080"
+              aria-label="Camera base URL"
+              title="Camera HTTP server URL"
+            />
+            <button type="submit" className="btn btn-primary btn-sm" title="Connect to camera">
+              Connect
+            </button>
+          </form>
+        )}
       </header>
 
       {errorMsg && (
@@ -586,6 +592,7 @@ export function App() {
             type="button"
             className="btn btn-sm"
             onClick={() => setErrorMsg(null)}
+            aria-label="Dismiss error"
           >
             Dismiss
           </button>
@@ -652,9 +659,10 @@ export function App() {
                 onStackSessionChange={(baseName) => {
                   stackSessionRef.current = baseName ? { baseName, nextIndex: 0 } : null;
                 }}
-                openFocusAvailable={hostCaps.openfocus.available}
+                openFocusAvailable={!__CAMERA_EMBEDDED__ && hostCaps.openfocus.available}
                 openFocusReason={hostCaps.openfocus.reason}
                 autoMerge={autoMerge}
+                hideAutoMerge={__CAMERA_EMBEDDED__}
                 onAutoMergeChange={(checked) => {
                   setAutoMerge(checked);
                   try {
@@ -663,31 +671,35 @@ export function App() {
                 }}
                 mergeStatus={mergeStatus}
                 measuredStep={measuredStep}
-                onStackSessionStart={handleStackSessionStart}
-                onCaptureStackShot={captureStackShot}
-                onStackSessionEnd={handleStackSessionEnd}
+                onStackSessionStart={__CAMERA_EMBEDDED__ ? undefined : handleStackSessionStart}
+                onCaptureStackShot={__CAMERA_EMBEDDED__ ? undefined : captureStackShot}
+                onStackSessionEnd={__CAMERA_EMBEDDED__ ? undefined : handleStackSessionEnd}
               />
-              <AutoSavePanel
-                enabled={autoSaveEnabled}
-                onToggle={(next) => {
-                  if (!hostCaps.backend) return;
-                  if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
-                    void handlePickDirectory();
-                  } else {
-                    setAutoSaveEnabled(next);
-                    try {
-                      localStorage.setItem('pmca_autosave_enabled', String(next));
-                    } catch {}
-                  }
-                }}
-                dirName={saveDirName}
-                onPickDirectory={() => void handlePickDirectory()}
-                backendAvailable={hostCaps.backend}
-                unavailableReason="Host backend not detected. Browser local Auto-Save requires running the UI via host-server/server.py due to browser filesystem permissions."
-                savedCount={savedCount}
-                lastSavedFile={lastSavedFile}
-                savingStatus={savingStatus}
-              />
+              {!__CAMERA_EMBEDDED__ && (
+                <AutoSavePanel
+                  enabled={autoSaveEnabled}
+                  onToggle={(next) => {
+                    if (!hostCaps.backend) return;
+                    if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
+                      void handlePickDirectory();
+                    } else {
+                      setAutoSaveEnabled(next);
+                      try {
+                        localStorage.setItem('pmca_autosave_enabled', String(next));
+                      } catch {}
+                    }
+                  }}
+                  dirName={saveDirName}
+                  onPickDirectory={() => void handlePickDirectory()}
+                  backendAvailable={hostCaps.backend}
+                  unavailableReason="Host backend not detected. Browser local Auto-Save requires running the UI via host-server/server.py due to browser filesystem permissions."
+                  savedCount={savedCount}
+                  lastSavedFile={lastSavedFile}
+                  savingStatus={savingStatus}
+                  connected={connected}
+                  getLatestPhotoUrl={() => client.latestPhotoUrl()}
+                />
+              )}
             </div>
           </div>
         )}

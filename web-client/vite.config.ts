@@ -7,6 +7,9 @@ const cameraTarget = process.env.VITE_CAMERA_URL || 'http://192.168.0.250:8080';
 const backendTarget = process.env.VITE_BACKEND_URL || 'https://127.0.0.1:8000';
 
 export default defineConfig(({ command }) => ({
+  define: {
+    __CAMERA_EMBEDDED__: JSON.stringify(process.env.VITE_CAMERA_EMBEDDED === 'true'),
+  },
   plugins: [
     react(),
     ...(command === 'serve' ? [basicSsl()] : []),

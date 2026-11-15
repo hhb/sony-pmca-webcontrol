@@ -65,6 +65,8 @@ export function RpcInspector({ client, connected }: RpcInspectorProps) {
           className="select-input"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
+          aria-label="RPC target"
+          title="Select RPC target object"
         >
           {(targetNames.length > 0
             ? targetNames
@@ -82,6 +84,7 @@ export function RpcInspector({ client, connected }: RpcInspectorProps) {
           value={method}
           onChange={(e) => setMethod(e.target.value)}
           placeholder="Method name"
+          aria-label="RPC method name"
         />
 
         <input
@@ -90,6 +93,7 @@ export function RpcInspector({ client, connected }: RpcInspectorProps) {
           value={argsText}
           onChange={(e) => setArgsText(e.target.value)}
           placeholder="JSON args array, e.g. []"
+          aria-label="RPC arguments JSON array"
         />
 
         <button
@@ -97,6 +101,7 @@ export function RpcInspector({ client, connected }: RpcInspectorProps) {
           className="btn btn-primary"
           disabled={!connected || busy || !method.trim()}
           onClick={handleInvoke}
+          title="Invoke RPC method"
         >
           {busy ? 'Calling...' : 'Call'}
         </button>
@@ -110,6 +115,7 @@ export function RpcInspector({ client, connected }: RpcInspectorProps) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={`Filter ${target} methods...`}
+            aria-label="Filter RPC methods"
           />
           <div className="method-chips">
             {filteredMethods.map((m) => (

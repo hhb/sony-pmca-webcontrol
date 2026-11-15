@@ -16,3 +16,5 @@ tools/
 !docs/*.png
 node_modules/
 dist/
+camera-app/app/src/main/assets/index.html
+camera-app/app/src/main/assets/index.html.gzip

@@ -247,6 +247,10 @@ export class CameraClient {
     return `${this.baseUrl}/api/liveview.mjpeg${query}`;
   }
 
+  liveViewJpgUrl(ts = Date.now()): string {
+    return `${this.baseUrl}/api/liveview.jpg?t=${ts}`;
+  }
+
   liveViewCloseUrl(cid: string): string {
     return `${this.baseUrl}/api/liveview/close?cid=${encodeURIComponent(cid)}`;
   }
@@ -318,10 +322,18 @@ export class CameraClient {
     return this.call('params', 'setSceneMode', [mode]);
   }
 
+  startZoom(direction: 0 | 1, speed = 1): Promise<unknown> {
+    return this.call('camera', 'startZoom', [direction, speed]);
+  }
+
+  stopZoom(): Promise<unknown> {
+    return this.call('camera', 'stopZoom');
+  }
+
   async zoomStep(direction: 0 | 1, speed = 1): Promise<void> {
-    await this.call('camera', 'startZoom', [direction, speed]);
+    await this.startZoom(direction, speed);
     await new Promise((r) => setTimeout(r, 90));
-    await this.call('camera', 'stopZoom');
+    await this.stopZoom();
   }
 
   setZoomPosition(opticalPosition: number, tolerance = 1): Promise<{ position: number; converged: boolean; superseded: boolean }> {

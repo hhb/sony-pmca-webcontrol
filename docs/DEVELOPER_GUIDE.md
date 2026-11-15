@@ -10,7 +10,7 @@ This guide covers repository layout, local build tooling, flashing workflows, CI
 sony-pmca-webcontrol/
 ├── camera-app/                 # Android 2.3 (API 10) in-camera APK (OpenMemories + NanoHTTPD)
 │   └── app/src/main/
-│       ├── assets/index.html   # Lightweight built-in fallback web UI served at http://<ip>:8080/
+│       ├── assets/index.html.gzip # Generated camera-embedded UI (via `npm run build:camera`, gitignored)
 │       └── java/com/sony/pmca/webcontrol/
 ├── web-client/                 # React + TypeScript + Vite frontend & CameraClient SDK
 │   └── src/api/
@@ -27,12 +27,18 @@ sony-pmca-webcontrol/
 ## 2. Building the Camera APK (`camera-app/`)
 
 ### Prerequisites
+* **Node.js 22+** (`>=22.12.0`) — required to build the embedded web UI asset (`index.html.gzip`)
 * **JDK 8** (Android Gradle plugin `2.1.x` fails on JDK 9+)
 * **Android SDK** with Platform 10 (`android-2.3.3`) and Build Tools `25.0.2`
 
 ### Build Command
+`camera-app/app/src/main/assets/index.html.gzip` is a generated build artifact and is not tracked in Git. Build the camera-embedded web UI first, then compile the APK:
 ```bash
-cd camera-app
+cd web-client
+npm ci
+npm run build:camera
+
+cd ../camera-app
 JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 ./gradlew assembleDebug
 ```
 Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk`
@@ -48,8 +54,9 @@ Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.a
 ```bash
 cd web-client
 npm install
-npm run dev       # Local HTTPS dev server (proxies /api -> camera and /local-api -> host-server)
-npm run build     # Type-check (tsc -b) + Vite single-file build -> web-client/dist/index.html
+npm run dev          # Local HTTPS dev server (proxies /api -> camera and /local-api -> host-server)
+npm run build        # Type-check (tsc -b) + Vite single-file build -> web-client/dist/index.html
+npm run build:camera # Camera-embedded conditional build + gzip -> camera-app/app/src/main/assets/index.html.gzip
 ```
 
 To run the host companion backend during development or production:

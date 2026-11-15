@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeoutException;
@@ -45,6 +46,18 @@ public class MacroHttpServer extends NanoHTTPD {
         @Override
         public String getDescription() {
             return "503 Service Unavailable";
+        }
+    };
+
+    private static final Response.IStatus STATUS_NOT_ACCEPTABLE = new Response.IStatus() {
+        @Override
+        public int getRequestStatus() {
+            return 406;
+        }
+
+        @Override
+        public String getDescription() {
+            return "406 Not Acceptable";
         }
     };
 
@@ -95,7 +108,9 @@ public class MacroHttpServer extends NanoHTTPD {
 
         try {
             if ("/".equals(uri) || "/index.html".equals(uri)) {
-                return serveAssetHtml("index.html");
+                String acceptEncoding = session.getHeaders().get("accept-encoding");
+                boolean acceptsGzip = acceptEncoding != null && acceptEncoding.toLowerCase(Locale.US).contains("gzip");
+                return serveAssetHtml("index.html.gzip", acceptsGzip);
             }
 
             if ("/api/describe".equals(uri)) {
@@ -363,10 +378,17 @@ public class MacroHttpServer extends NanoHTTPD {
         return new JSONObject();
     }
 
-    private Response serveAssetHtml(String assetName) {
+    private Response serveAssetHtml(String assetName, boolean acceptsGzip) {
+        if (!acceptsGzip) {
+            Response res = new Response(STATUS_NOT_ACCEPTABLE, MIME_PLAINTEXT, "Client must support gzip (Accept-Encoding: gzip)");
+            res.addHeader("Vary", "Accept-Encoding");
+            return addCors(res);
+        }
         try {
             InputStream is = m_activity.getAssets().open(assetName);
             Response res = new Response(Response.Status.OK, "text/html; charset=utf-8", is);
+            res.addHeader("Content-Encoding", "gzip");
+            res.addHeader("Vary", "Accept-Encoding");
             res.addHeader("Cache-Control", "no-store, no-cache");
             return addCors(res);
         } catch (Throwable t) {

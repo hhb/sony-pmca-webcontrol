@@ -71,6 +71,7 @@ export function PhotoBrowser({ client, connected, onError }: PhotoBrowserProps) 
               setPreviewName('Latest Capture');
               setPreviewUrl(client.latestPhotoUrl(Date.now()));
             }}
+            title="Preview the most recently captured photo"
           >
             Latest Photo
           </button>
@@ -79,6 +80,7 @@ export function PhotoBrowser({ client, connected, onError }: PhotoBrowserProps) 
             className="btn btn-sm"
             disabled={!connected || loading}
             onClick={() => void loadDir(currentDir)}
+            title="Refresh current directory"
           >
             {loading ? 'Loading...' : 'Refresh'}
           </button>
@@ -91,6 +93,8 @@ export function PhotoBrowser({ client, connected, onError }: PhotoBrowserProps) 
           className="btn btn-sm"
           disabled={!connected || !currentDir}
           onClick={goUp}
+          title="Go to parent directory"
+          aria-label="Go to parent directory"
         >
           Up
         </button>

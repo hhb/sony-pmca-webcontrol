@@ -75,6 +75,7 @@ export function LiveViewPanel({
 
   const [fps, setFps] = useState<number>(0);
   const [frameError, setFrameError] = useState<string | null>(null);
+  const [lvMode, setLvMode] = useState<'mjpeg' | 'jpg'>('mjpeg');
 
   const magEnabled = Boolean(previewMagnification?.enabled);
   const magRatio = previewMagnification?.ratio ?? 100;
@@ -381,16 +382,51 @@ export function LiveViewPanel({
       }
     };
 
-    void startStream();
+    const startJpgLoop = async () => {
+      while (!cancelled) {
+        activeController = new AbortController();
+        try {
+          const res = await fetch(client.liveViewJpgUrl(), {
+            signal: activeController.signal,
+            cache: 'no-store',
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const blob = await res.blob();
+          if (cancelled) break;
+          setFrameError(null);
+          pendingBlob = blob;
+          await renderLoop();
+        } catch (err) {
+          if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
+            return;
+          }
+          setFrameError('LiveView JPEG unavailable');
+          setFps(0);
+          await new Promise<void>((resolve) => {
+            retryTimer = window.setTimeout(resolve, 1500);
+          });
+        }
+      }
+    };
+
+    if (lvMode === 'jpg') {
+      void startJpgLoop();
+    } else {
+      void startStream();
+    }
 
     return () => {
       cancelled = true;
       void activeReader?.cancel().catch(() => {});
       activeController?.abort();
-      client.closeLiveView(liveViewCidRef.current);
+      if (lvMode === 'mjpeg') {
+        client.closeLiveView(liveViewCidRef.current);
+      }
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [client, connected, streaming, pageVisible]);
+  }, [client, connected, streaming, pageVisible, lvMode]);
 
   const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!connected) return;
@@ -613,6 +649,8 @@ export function LiveViewPanel({
               setFrameError(null);
               setStreaming((s) => !s);
             }}
+            title={streaming ? 'Pause LiveView stream' : 'Resume LiveView stream'}
+            aria-label={streaming ? 'Pause LiveView stream' : 'Resume LiveView stream'}
           >
             {streaming ? 'Pause' : 'Resume'}
           </button>
@@ -620,6 +658,8 @@ export function LiveViewPanel({
             type="button"
             className={`btn btn-sm ${showGrid ? 'btn-active' : ''}`}
             onClick={() => setShowGrid((g) => !g)}
+            title="Toggle rule-of-thirds composition grid"
+            aria-label="Toggle rule-of-thirds composition grid"
           >
             Grid
           </button>
@@ -627,6 +667,8 @@ export function LiveViewPanel({
             type="button"
             className={`btn btn-sm ${peaking ? 'btn-active' : ''}`}
             onClick={() => setPeaking((p) => !p)}
+            title="Toggle focus peaking highlight overlay"
+            aria-label="Toggle focus peaking highlight overlay"
           >
             Peaking
           </button>
@@ -634,14 +676,29 @@ export function LiveViewPanel({
             type="button"
             className={`btn btn-sm ${showHistogram ? 'btn-active' : ''}`}
             onClick={() => setShowHistogram((h) => !h)}
+            title="Toggle live luminance histogram overlay"
+            aria-label="Toggle live luminance histogram overlay"
           >
             Hist
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${lvMode === 'jpg' ? 'btn-active' : ''}`}
+            onClick={() => {
+              setFrameError(null);
+              setLvMode((m) => (m === 'mjpeg' ? 'jpg' : 'mjpeg'));
+            }}
+            title="Debug: switch LiveView transport between MJPEG stream and single-frame JPEG polling"
+            aria-label="Debug: switch LiveView transport between MJPEG stream and single-frame JPEG polling"
+          >
+            {lvMode === 'mjpeg' ? 'MJPEG' : 'JPEG'}
           </button>
           <button
             type="button"
             className="btn btn-sm"
             onClick={() => rotateBy(270)}
             title="Rotate Left 90°"
+            aria-label="Rotate Left 90°"
           >
             ↺
           </button>
@@ -650,6 +707,7 @@ export function LiveViewPanel({
             className="btn btn-sm"
             onClick={() => rotateBy(90)}
             title="Rotate Right 90°"
+            aria-label="Rotate Right 90°"
           >
             ↻
           </button>
@@ -689,6 +747,7 @@ export function LiveViewPanel({
           disabled={!connected || capturing}
           onClick={onCapture}
           title="Take Picture"
+          aria-label="Take Picture"
         >
           <span className="shutter-inner" />
         </button>
@@ -753,6 +812,7 @@ export function LiveViewPanel({
               } catch {}
             }}
             title="Auto-reset magnification to 1x after N seconds"
+            aria-label="Auto-reset magnification delay"
           >
             <option value={0}>Auto-Reset: Off</option>
             <option value={3}>Reset in 3s</option>
