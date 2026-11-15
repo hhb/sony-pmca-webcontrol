@@ -41,3 +41,23 @@ dependencies {
     compile 'com.github.ma1co.OpenMemories-Framework:framework:-SNAPSHOT'
     compile 'com.nanohttpd:nanohttpd:2.1.1'
 }
+
+task buildCameraWebUi(type: Exec) {
+    def webClientDir = file('../../web-client')
+    inputs.dir new File(webClientDir, 'src')
+    inputs.file new File(webClientDir, 'index.html')
+    inputs.file new File(webClientDir, 'package.json')
+    inputs.file new File(webClientDir, 'package-lock.json')
+    inputs.file new File(webClientDir, 'tsconfig.json')
+    inputs.file new File(webClientDir, 'vite.config.ts')
+    outputs.file file('src/main/assets/index.html.gzip')
+
+    workingDir webClientDir
+    if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+        commandLine 'cmd', '/c', 'if not exist node_modules (npm ci && npm run build:camera) else (npm run build:camera)'
+    } else {
+        commandLine 'sh', '-c', 'if [ ! -d node_modules ]; then npm ci; fi && npm run build:camera'
+    }
+}
+
+preBuild.dependsOn buildCameraWebUi

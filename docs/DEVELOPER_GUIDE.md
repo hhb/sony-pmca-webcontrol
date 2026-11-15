@@ -32,13 +32,9 @@ sony-pmca-webcontrol/
 * **Android SDK** with Platform 10 (`android-2.3.3`) and Build Tools `25.0.2`
 
 ### Build Command
-`camera-app/app/src/main/assets/index.html.gzip` is a generated build artifact and is not tracked in Git. Build the camera-embedded web UI first, then compile the APK:
+`camera-app/app/src/main/assets/index.html.gzip` is a generated build artifact (gitignored). Gradle's `buildCameraWebUi` task automatically runs `npm run build:camera` (and `npm ci` if `node_modules` is missing) whenever `web-client/` changes or the asset is missing:
 ```bash
-cd web-client
-npm ci
-npm run build:camera
-
-cd ../camera-app
+cd camera-app
 JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 ./gradlew assembleDebug
 ```
 Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.apk`
