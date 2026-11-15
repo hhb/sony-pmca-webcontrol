@@ -804,6 +804,76 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.checkbox-row.is-disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.checkbox-row.is-disabled input {
+  cursor: not-allowed;
+}
+
+.info-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
+.info-tooltip-bubble {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 240px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #11161f;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.35;
+  white-space: normal;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  z-index: 30;
+  pointer-events: none;
+}
+
+.info-tooltip-wrap:hover .info-tooltip-bubble,
+.info-tooltip-wrap:focus-within .info-tooltip-bubble {
+  display: block;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

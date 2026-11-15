@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 const cameraTarget = process.env.VITE_CAMERA_URL || 'http://192.168.0.250:8080';
+const backendTarget = process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export default defineConfig(({ command }) => ({
   plugins: [
@@ -16,6 +17,10 @@ export default defineConfig(({ command }) => ({
     proxy: {
       '/api': {
         target: cameraTarget,
+        changeOrigin: true,
+      },
+      '/local-api': {
+        target: backendTarget,
         changeOrigin: true,
       },
     },

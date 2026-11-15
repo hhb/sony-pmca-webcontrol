@@ -11,6 +11,17 @@ import {
   saveBlobToDirectory,
   triggerBrowserDownload,
 } from './api/localSave';
+import {
+  backendStackResultUrl,
+  createBackendStackSession,
+  deleteBackendStackSession,
+  fetchHostCapabilities,
+  getBackendStackStatus,
+  grabLatestToBackendStack,
+  type HostCapabilities,
+  saveLatestPhotoToBackend,
+  triggerBackendStackMerge,
+} from './api/hostBackend';
 import { AutoSavePanel } from './components/AutoSavePanel';
 import { ExposureControl } from './components/ExposureControl';
 import { FocusControl } from './components/FocusControl';
@@ -110,9 +121,32 @@ export function App() {
   const [savedCount, setSavedCount] = useState<number>(0);
   const [lastSavedFile, setLastSavedFile] = useState<string | null>(null);
   const [savingStatus, setSavingStatus] = useState<string | null>(null);
+  const [hostCaps, setHostCaps] = useState<HostCapabilities>({
+    backend: false,
+    openfocus: {
+      available: false,
+      reason: 'Checking host backend...',
+    },
+  });
+  const [autoMerge, setAutoMerge] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('pmca_automerge_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
 
   const seqRef = useRef<number>(0);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const hostCapsRef = useRef<HostCapabilities>(hostCaps);
+  hostCapsRef.current = hostCaps;
+  const activeUrlRef = useRef<string>(activeUrl);
+  activeUrlRef.current = activeUrl;
+
+  useEffect(() => {
+    void fetchHostCapabilities().then(setHostCaps);
+  }, []);
   const autoSaveRef = useRef<boolean>(false);
   autoSaveRef.current = autoSaveEnabled;
 
@@ -131,7 +165,8 @@ export function App() {
 
   const handledFilesRef = useRef<Set<string>>(new Set());
   const stackSessionRef = useRef<{ baseName: string; nextIndex: number } | null>(null);
-  const saveQueueRef = useRef<Array<{ name: string; url: string }>>([]);
+  const backendMergeSessionRef = useRef<{ sessionId: string; pendingGrabs: Set<Promise<void>> } | null>(null);
+  const saveQueueRef = useRef<Array<{ name: string; url?: string; useBackend?: boolean; cameraUrl?: string }>>([]);
   const isProcessingQueueRef = useRef<boolean>(false);
 
   const processSaveQueue = useCallback(async () => {
@@ -142,13 +177,17 @@ export function App() {
       if (!task) break;
       setSavingStatus(`Saving ${task.name}...`);
       try {
-        const res = await fetch(task.url);
-        if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-        const blob = await res.blob();
-        if (dirHandleRef.current) {
-          await saveBlobToDirectory(dirHandleRef.current, task.name, blob);
-        } else {
-          triggerBrowserDownload(task.name, blob);
+        if (task.useBackend) {
+          await saveLatestPhotoToBackend(task.name, task.cameraUrl);
+        } else if (task.url) {
+          const res = await fetch(task.url);
+          if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+          const blob = await res.blob();
+          if (dirHandleRef.current) {
+            await saveBlobToDirectory(dirHandleRef.current, task.name, blob);
+          } else {
+            triggerBrowserDownload(task.name, blob);
+          }
         }
         setSavedCount((c) => c + 1);
         setLastSavedFile(task.name);
@@ -161,7 +200,7 @@ export function App() {
   }, []);
 
   const queueSavePhoto = useCallback(
-    (task: { name: string; url: string }) => {
+    (task: { name: string; url?: string; useBackend?: boolean; cameraUrl?: string }) => {
       saveQueueRef.current.push(task);
       void processSaveQueue();
     },
@@ -197,22 +236,121 @@ export function App() {
 
   const handleCaptureEvent = useCallback(
     (ev: CameraEvent) => {
+      if (ev.type !== 'Jpeg') return;
+
+      const dedupKey = `jpeg_${ev.seq}`;
+      if (handledFilesRef.current.has(dedupKey)) return;
+      if (handledFilesRef.current.size > 500) {
+        handledFilesRef.current.clear();
+      }
+      handledFilesRef.current.add(dedupKey);
+
+      const mergeSession = backendMergeSessionRef.current;
+      if (mergeSession) {
+        const grabTask = grabLatestToBackendStack(mergeSession.sessionId, activeUrlRef.current)
+          .then(() => undefined)
+          .catch((err) => {
+            setErrorMsg(err instanceof Error ? err.message : String(err));
+          });
+        mergeSession.pendingGrabs.add(grabTask);
+        void grabTask.finally(() => {
+          mergeSession.pendingGrabs.delete(grabTask);
+        });
+        return;
+      }
+
       if (!autoSaveRef.current) return;
 
-      if (ev.type === 'Jpeg') {
-        const dedupKey = `jpeg_${ev.seq}`;
-        if (handledFilesRef.current.has(dedupKey)) return;
-        if (handledFilesRef.current.size > 500) {
-          handledFilesRef.current.clear();
-        }
-        handledFilesRef.current.add(dedupKey);
+      const fileName = nextCaptureFileName();
+      if (hostCapsRef.current.backend && !dirHandleRef.current) {
         queueSavePhoto({
-          name: nextCaptureFileName(),
+          name: fileName,
+          useBackend: true,
+          cameraUrl: activeUrlRef.current,
+        });
+      } else {
+        queueSavePhoto({
+          name: fileName,
           url: client.latestPhotoUrl(Date.now()),
         });
       }
     },
     [client, nextCaptureFileName, queueSavePhoto],
+  );
+
+  const handleStackSessionStart = useCallback(
+    async (baseName: string, useAutoMerge: boolean) => {
+      if (!useAutoMerge) return;
+      await createBackendStackSession(baseName, activeUrlRef.current);
+      backendMergeSessionRef.current = {
+        sessionId: baseName,
+        pendingGrabs: new Set(),
+      };
+      setMergeStatus(null);
+    },
+    [],
+  );
+
+  const handleStackSessionEnd = useCallback(
+    async (baseName: string, useAutoMerge: boolean, aborted: boolean) => {
+      if (!useAutoMerge || !backendMergeSessionRef.current) return;
+      const session = backendMergeSessionRef.current;
+      // Allow brief window for final Jpeg SSE event to arrive before flushing grabs
+      await new Promise((r) => window.setTimeout(r, 1500));
+      if (session.pendingGrabs.size > 0) {
+        await Promise.allSettled(Array.from(session.pendingGrabs));
+      }
+      if (backendMergeSessionRef.current === session) {
+        backendMergeSessionRef.current = null;
+      }
+
+      if (aborted) {
+        await deleteBackendStackSession(baseName);
+        setMergeStatus(null);
+        return;
+      }
+
+      const mergedFileName = `${baseName}.jpg`;
+      const saveToBackend = hostCapsRef.current.backend && !dirHandleRef.current && autoSaveRef.current;
+      try {
+        setMergeStatus('Merging with OpenFocus...');
+        setSavingStatus('Merging with OpenFocus...');
+        await triggerBackendStackMerge(baseName, {
+          saveToBackend,
+          filename: mergedFileName,
+        });
+
+        while (true) {
+          await new Promise((r) => window.setTimeout(r, 1000));
+          const st = await getBackendStackStatus(baseName);
+          if (st.status === 'done') {
+            if (saveToBackend) {
+              setSavedCount((c) => c + 1);
+              setLastSavedFile(st.savedFilename || mergedFileName);
+              setSavingStatus(null);
+            } else {
+              queueSavePhoto({
+                name: mergedFileName,
+                url: backendStackResultUrl(baseName),
+              });
+            }
+            setMergeStatus('Merged (1 photo saved)');
+            break;
+          }
+          if (st.status === 'error') {
+            throw new Error(st.error || 'OpenFocus merge failed');
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setErrorMsg(msg);
+        setMergeStatus(`Merge error: ${msg}`);
+        setSavingStatus(null);
+      } finally {
+        await deleteBackendStackSession(baseName);
+      }
+    },
+    [queueSavePhoto],
   );
 
   const eventsCidRef = useRef<string>(getEventsClientId());
@@ -423,11 +561,23 @@ export function App() {
                 onStackSessionChange={(baseName) => {
                   stackSessionRef.current = baseName ? { baseName, nextIndex: 0 } : null;
                 }}
+                openFocusAvailable={hostCaps.openfocus.available}
+                openFocusReason={hostCaps.openfocus.reason}
+                autoMerge={autoMerge}
+                onAutoMergeChange={(checked) => {
+                  setAutoMerge(checked);
+                  try {
+                    localStorage.setItem('pmca_automerge_enabled', String(checked));
+                  } catch {}
+                }}
+                mergeStatus={mergeStatus}
+                onStackSessionStart={handleStackSessionStart}
+                onStackSessionEnd={handleStackSessionEnd}
               />
               <AutoSavePanel
                 enabled={autoSaveEnabled}
                 onToggle={(next) => {
-                  if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
+                  if (next && !hostCaps.backend && isDirectoryPickerSupported() && !dirHandleRef.current) {
                     void handlePickDirectory();
                   } else {
                     setAutoSaveEnabled(next);
@@ -438,6 +588,8 @@ export function App() {
                 }}
                 dirName={saveDirName}
                 onPickDirectory={() => void handlePickDirectory()}
+                backendAvailable={hostCaps.backend}
+                backendSaveDir={hostCaps.saveDir}
                 savedCount={savedCount}
                 lastSavedFile={lastSavedFile}
                 savingStatus={savingStatus}

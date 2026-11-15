@@ -12,6 +12,13 @@ interface FocusControlProps {
   connected: boolean;
   onError: (msg: string) => void;
   onStackSessionChange?: (baseName: string | null) => void;
+  openFocusAvailable: boolean;
+  openFocusReason: string;
+  autoMerge: boolean;
+  onAutoMergeChange: (checked: boolean) => void;
+  mergeStatus?: string | null;
+  onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
+  onStackSessionEnd?: (baseName: string, autoMerge: boolean, aborted: boolean) => Promise<void> | void;
 }
 
 function formatCaptureBaseName(): string {
@@ -26,6 +33,13 @@ export function FocusControl({
   connected,
   onError,
   onStackSessionChange,
+  openFocusAvailable,
+  openFocusReason,
+  autoMerge,
+  onAutoMergeChange,
+  mergeStatus,
+  onStackSessionStart,
+  onStackSessionEnd,
 }: FocusControlProps) {
   const [busy, setBusy] = useState(false);
   const [stackRunning, setStackRunning] = useState(false);
@@ -126,6 +140,7 @@ export function FocusControl({
       prefixClearTimerRef.current = null;
     }
     const runBaseName = formatCaptureBaseName();
+    const useAutoMerge = openFocusAvailable && autoMerge;
     onStackSessionChange?.(runBaseName);
 
     const controller = new AbortController();
@@ -133,7 +148,9 @@ export function FocusControl({
     setBusy(true);
     setStackRunning(true);
     setStackStatus('Starting focus stack...');
+    let aborted = false;
     try {
+      await onStackSessionStart?.(runBaseName, useAutoMerge);
       await client.runFocusStack(
         a,
         b,
@@ -146,6 +163,7 @@ export function FocusControl({
       );
       setStackStatus('Focus stack complete');
     } catch (err) {
+      aborted = true;
       if (err instanceof DOMException && err.name === 'AbortError') {
         setStackStatus('Focus stack aborted');
       } else {
@@ -157,6 +175,7 @@ export function FocusControl({
       abortRef.current = null;
       setStackRunning(false);
       setBusy(false);
+      void onStackSessionEnd?.(runBaseName, useAutoMerge, aborted);
       prefixClearTimerRef.current = window.setTimeout(() => {
         onStackSessionChange?.(null);
         prefixClearTimerRef.current = null;
@@ -379,8 +398,32 @@ export function FocusControl({
           </div>
         </div>
 
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className={`checkbox-row ${!openFocusAvailable ? 'is-disabled' : ''}`}>
+            <input
+              type="checkbox"
+              disabled={!openFocusAvailable || stackRunning}
+              checked={openFocusAvailable && autoMerge}
+              onChange={(e) => onAutoMergeChange(e.target.checked)}
+            />
+            <span>Auto Merge (OpenFocus)</span>
+          </label>
+          {!openFocusAvailable && (
+            <span className="info-tooltip-wrap">
+              <span className="info-icon" tabIndex={0} aria-label={openFocusReason}>
+                i
+              </span>
+              <span className="info-tooltip-bubble">{openFocusReason}</span>
+            </span>
+          )}
+        </div>
+
         <div className="stack-actions">
-          {stackStatus && <span className="muted-tag" style={{ marginRight: 'auto' }}>{stackStatus}</span>}
+          {(mergeStatus || stackStatus) && (
+            <span className="muted-tag" style={{ marginRight: 'auto' }}>
+              {mergeStatus ?? stackStatus}
+            </span>
+          )}
           {!stackRunning ? (
             <button
               type="button"

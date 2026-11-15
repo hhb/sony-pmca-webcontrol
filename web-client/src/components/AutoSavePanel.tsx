@@ -5,6 +5,8 @@ interface AutoSavePanelProps {
   onToggle: (enabled: boolean) => void;
   dirName: string | null;
   onPickDirectory: () => void;
+  backendAvailable: boolean;
+  backendSaveDir?: string;
   savedCount: number;
   lastSavedFile: string | null;
   savingStatus: string | null;
@@ -15,6 +17,8 @@ export function AutoSavePanel({
   onToggle,
   dirName,
   onPickDirectory,
+  backendAvailable,
+  backendSaveDir,
   savedCount,
   lastSavedFile,
   savingStatus,
@@ -38,13 +42,36 @@ export function AutoSavePanel({
       </div>
 
       <div className="autosave-row">
-        {pickerSupported ? (
+        {dirName ? (
           <button
             type="button"
-            className={`btn btn-sm ${enabled && !dirName ? 'btn-primary' : ''}`}
+            className="btn btn-sm"
             onClick={onPickDirectory}
           >
-            {dirName ? `Folder: ${dirName}` : enabled ? 'Select Folder to Save' : 'Choose Local Folder'}
+            {`Folder: ${dirName}`}
+          </button>
+        ) : backendAvailable ? (
+          <>
+            <span className="muted-tag" title={backendSaveDir}>
+              {`Backend folder: ${backendSaveDir || './captures'}`}
+            </span>
+            {pickerSupported && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={onPickDirectory}
+              >
+                Use Browser Folder
+              </button>
+            )}
+          </>
+        ) : pickerSupported ? (
+          <button
+            type="button"
+            className={`btn btn-sm ${enabled ? 'btn-primary' : ''}`}
+            onClick={onPickDirectory}
+          >
+            {enabled ? 'Select Folder to Save' : 'Choose Local Folder'}
           </button>
         ) : (
           <span className="muted-tag">
