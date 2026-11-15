@@ -688,10 +688,33 @@ export function LiveViewPanel({
               setFrameError(null);
               setLvMode((m) => (m === 'mjpeg' ? 'jpg' : 'mjpeg'));
             }}
-            title="Debug: switch LiveView transport between MJPEG stream and single-frame JPEG polling"
-            aria-label="Debug: switch LiveView transport between MJPEG stream and single-frame JPEG polling"
+            aria-pressed={lvMode === 'jpg'}
+            title={
+              lvMode === 'jpg'
+                ? 'Single-frame JPEG mode (click to switch to MJPEG stream)'
+                : 'MJPEG stream mode (click to switch to single-frame JPEG)'
+            }
+            aria-label={
+              lvMode === 'jpg'
+                ? 'Single-frame JPEG mode, switch to MJPEG stream'
+                : 'MJPEG stream mode, switch to single-frame JPEG'
+            }
           >
-            {lvMode === 'mjpeg' ? 'MJPEG' : 'JPEG'}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <circle cx="8.5" cy="10" r="1.5" />
+              <path d="M21 16l-5-5-6 6-3-3-4 4" />
+            </svg>
           </button>
           <button
             type="button"
