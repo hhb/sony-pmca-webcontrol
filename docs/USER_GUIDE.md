@@ -90,7 +90,7 @@ Run the zero-dependency Python 3 companion server on your computer to serve `web
 ```bash
 python3 host-server/server.py --camera http://<camera-ip>:8080 --openfocus-dir /path/to/OpenFocus
 ```
-Then open `http://localhost:8000` in your browser.
+Then open `https://localhost:8000` (or `https://<host-ip>:8000` over LAN, accepting the self-signed certificate) in your browser. HTTPS is always enabled so `showDirectoryPicker` Auto-Save works across your LAN.
 
 ### Option C: Built-in Fallback UI
 Opening `http://<camera-ip>:8080` directly in any browser on your LAN serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.

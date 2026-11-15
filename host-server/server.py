@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -457,11 +458,61 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     pass
 
 
+def ensure_self_signed_cert(cert_path: Path, key_path: Path) -> tuple[Path, Path]:
+    """Generate a reusable self-signed TLS certificate via openssl if missing."""
+    if cert_path.is_file() and key_path.is_file():
+        return cert_path, key_path
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    openssl_bin = shutil.which("openssl")
+    if not openssl_bin:
+        raise RuntimeError(
+            "openssl not found in PATH; install openssl or pass --cert/--key."
+        )
+    cmd = [
+        openssl_bin,
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+        "-days",
+        "365",
+        "-subj",
+        "/CN=pmca-webcontrol",
+        "-addext",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        # Retry without -addext for older OpenSSL versions
+        fallback_cmd = cmd[:-2]
+        proc = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise RuntimeError(f"Failed to generate self-signed certificate: {detail}")
+    return cert_path, key_path
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
+    cache_dir = Path.home() / ".cache" / "pmca-webcontrol"
     parser = argparse.ArgumentParser(description="Sony PMCA WebControl host companion server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    parser.add_argument(
+        "--cert",
+        default=str(cache_dir / "cert.pem"),
+        help="Path to TLS certificate PEM (default: ~/.cache/pmca-webcontrol/cert.pem)",
+    )
+    parser.add_argument(
+        "--key",
+        default=str(cache_dir / "key.pem"),
+        help="Path to TLS private key PEM (default: ~/.cache/pmca-webcontrol/key.pem)",
+    )
     parser.add_argument(
         "--camera",
         default=os.environ.get("CAMERA_URL", "http://192.168.0.250:8080"),
@@ -496,7 +547,15 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), CompanionHandler)
     server.app_state = state  # type: ignore[attr-defined]
 
-    print(f"PMCA Host Backend listening on http://{args.host}:{args.port}")
+    cert_path, key_path = ensure_self_signed_cert(
+        Path(args.cert).expanduser(),
+        Path(args.key).expanduser(),
+    )
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+
+    print(f"PMCA Host Backend listening on https://{args.host}:{args.port}")
     print(f"Camera target : {state.camera_url}")
     print(f"OpenFocus     : {openfocus_info['available']} - {openfocus_info['reason']}")
     try:
