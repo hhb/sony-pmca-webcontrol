@@ -222,6 +222,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _drain_request_body(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 0:
+            self.rfile.read(length)
+
     def _read_json_body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
@@ -331,6 +336,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if m_grab:
             session = self.app_state.get_session(m_grab.group(1))
             if not session:
+                self._drain_request_body()
                 self._send_json(404, {"error": "Stack session not found"})
                 return
             try:
@@ -349,6 +355,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
         m_merge = re.match(r"^/local-api/stacks/([A-Za-z0-9._-]+)/merge$", path)
         if m_merge:
+            self._drain_request_body()
             session = self.app_state.get_session(m_merge.group(1))
             if not session:
                 self._send_json(404, {"error": "Stack session not found"})
@@ -381,12 +388,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
             self._proxy_camera("POST")
             return
 
+        self._drain_request_body()
         self._send_json(404, {"error": "Not found"})
 
     def do_DELETE(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         m_del = re.match(r"^/local-api/stacks/([A-Za-z0-9._-]+)$", parsed.path)
         if m_del:
+            self._drain_request_body()
             self.app_state.delete_session(m_del.group(1))
             self._send_json(200, {"ok": True})
             return
@@ -395,6 +404,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             self._proxy_camera("DELETE")
             return
 
+        self._drain_request_body()
         self._send_json(404, {"error": "Not found"})
 
     def _proxy_camera(self, method: str) -> None:
