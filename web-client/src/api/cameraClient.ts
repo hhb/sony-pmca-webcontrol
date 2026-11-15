@@ -373,6 +373,7 @@ export class CameraClient {
     onProgress: (info: { index: number; total: number; targetPos: number; actualPos: number }) => void,
     signal?: AbortSignal,
     onTarget?: (targetPos: number) => void,
+    onCaptureShot?: (triggerShot: () => Promise<unknown>, signal?: AbortSignal) => Promise<void>,
   ): Promise<void> {
     const positions = computeFocusStackPositions(startPos, endPos, stepSize);
     for (let i = 0; i < positions.length; i++) {
@@ -383,8 +384,12 @@ export class CameraClient {
       onProgress({ index: i + 1, total: positions.length, targetPos: target, actualPos: actual });
       await new Promise((r) => setTimeout(r, settleMs));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      await this.takePicture();
-      await new Promise((r) => setTimeout(r, 900));
+      if (onCaptureShot) {
+        await onCaptureShot(() => this.takePicture(), signal);
+      } else {
+        await this.takePicture();
+        await new Promise((r) => setTimeout(r, 900));
+      }
     }
   }
 }

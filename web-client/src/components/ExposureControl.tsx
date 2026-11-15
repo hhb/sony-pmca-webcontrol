@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
@@ -27,7 +27,6 @@ export function ExposureControl({
   const [localIso, setLocalIso] = useState<number | null>(null);
   const [isoOptions, setIsoOptions] = useState<number[]>(ISO_PRESETS);
   const [sceneMode, setSceneMode] = useState<string | null>(null);
-  const lastManualIsoRef = useRef<number>(100);
 
   const ec = typeof state?.exposureCompensation === 'object' ? state.exposureCompensation : undefined;
   const stateEvIndex =
@@ -165,10 +164,8 @@ export function ExposureControl({
     state?.shutter?.currentShutterSpeed_d,
   );
   const isoValue = localIso !== null ? localIso : state?.autoIso;
-  const autoIso = isoValue === 0;
-  if (typeof isoValue === 'number' && isoValue > 0) {
-    lastManualIsoRef.current = isoValue;
-  }
+  const hasAutoExposure = autoAperture || autoShutter || isoValue === 0;
+  const evDisabled = !connected || busy || !hasAutoExposure;
 
   const changeIso = async (val: number) => {
     setLocalIso(val);
@@ -202,6 +199,7 @@ export function ExposureControl({
         <div className="metric-card">
           <div className="metric-header-row">
             <span className="metric-label">Aperture</span>
+            <span className="metric-value metric-value-inline">{aperture}</span>
             <label className="metric-auto-toggle">
               <input
                 type="checkbox"
@@ -214,7 +212,6 @@ export function ExposureControl({
               <span>Auto</span>
             </label>
           </div>
-          <div className="metric-value">{aperture}</div>
           <div className="stepper-row">
             <button
               type="button"
@@ -240,6 +237,7 @@ export function ExposureControl({
         <div className="metric-card">
           <div className="metric-header-row">
             <span className="metric-label">Shutter</span>
+            <span className="metric-value metric-value-inline">{shutter}</span>
             <label className="metric-auto-toggle">
               <input
                 type="checkbox"
@@ -252,7 +250,6 @@ export function ExposureControl({
               <span>Auto</span>
             </label>
           </div>
-          <div className="metric-value">{shutter}</div>
           <div className="stepper-row">
             <button
               type="button"
@@ -278,26 +275,11 @@ export function ExposureControl({
         <div className="metric-card">
           <div className="metric-header-row">
             <span className="metric-label">ISO</span>
-            <label className="metric-auto-toggle">
-              <input
-                type="checkbox"
-                disabled={!connected || busy}
-                checked={autoIso}
-                onChange={(e) => {
-                  const target = e.target.checked ? 0 : lastManualIsoRef.current;
-                  void runAction(() => changeIso(target));
-                }}
-              />
-              <span>Auto</span>
-            </label>
-          </div>
-          <div className="metric-value">
-            {isoValue === undefined ? '--' : isoValue === 0 ? 'AUTO' : isoValue}
           </div>
           <select
             className="select-input"
             style={{ width: '100%' }}
-            disabled={!connected || busy || autoIso}
+            disabled={!connected || busy}
             value={isoValue ?? ''}
             onChange={(e) => {
               const val = Number(e.target.value);
@@ -320,35 +302,47 @@ export function ExposureControl({
         <div className="metric-card">
           <div className="metric-header-row">
             <span className="metric-label">EV Comp</span>
+            <span className="metric-value metric-value-inline">{evDisplay}</span>
             {evIndex !== 0 && connected && (
               <button
                 type="button"
                 className="metric-reset-btn"
                 onClick={() => runAction(resetEv)}
-                title="Reset EV to ±0.0"
-                disabled={busy}
+                title={
+                  !hasAutoExposure
+                    ? 'EV compensation has no effect without Auto Aperture, Shutter, or ISO'
+                    : 'Reset EV to ±0.0'
+                }
+                disabled={evDisabled}
               >
                 Reset
               </button>
             )}
           </div>
-          <div className="metric-value">{evDisplay}</div>
           <div className="stepper-row">
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy || evIndex <= evMin}
+              disabled={evDisabled || evIndex <= evMin}
               onClick={() => runAction(() => changeEv(-1))}
-              title="Decrease exposure compensation (-1/3 EV)"
+              title={
+                !hasAutoExposure
+                  ? 'EV compensation requires Aperture, Shutter, or ISO set to Auto'
+                  : 'Decrease exposure compensation (-1/3 EV)'
+              }
             >
               -
             </button>
             <button
               type="button"
               className="btn"
-              disabled={!connected || busy || evIndex >= evMax}
+              disabled={evDisabled || evIndex >= evMax}
               onClick={() => runAction(() => changeEv(1))}
-              title="Increase exposure compensation (+1/3 EV)"
+              title={
+                !hasAutoExposure
+                  ? 'EV compensation requires Aperture, Shutter, or ISO set to Auto'
+                  : 'Increase exposure compensation (+1/3 EV)'
+              }
             >
               +
             </button>

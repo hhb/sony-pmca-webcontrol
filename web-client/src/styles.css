@@ -120,22 +120,38 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
+}
+
+.liveview-panel {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.side-column {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 @media (max-width: 900px) {
   .control-layout {
     grid-template-columns: 1fr;
   }
+  .liveview-panel,
+  .side-column {
+    grid-column: auto;
+    grid-row: auto;
+    height: auto;
+  }
   .url-input {
     width: 170px;
   }
-}
-
-.side-column {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
 }
 
 .panel {
@@ -250,7 +266,8 @@ body {
 .liveview-stage {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 2;
+  flex: 1;
+  min-height: 260px;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -259,7 +276,16 @@ body {
   justify-content: center;
 }
 
+@media (max-width: 900px) {
+  .liveview-stage {
+    flex: none;
+    aspect-ratio: 3 / 2;
+  }
+}
+
 .liveview-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -424,6 +450,7 @@ body {
   color: var(--muted);
   cursor: pointer;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .metric-auto-toggle input {
@@ -434,8 +461,17 @@ body {
 .metric-header-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   width: 100%;
+  min-height: 20px;
+}
+
+.metric-value-inline {
+  flex: 1;
+  text-align: center;
+  font-size: 0.92rem;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .metric-reset-btn {
@@ -448,17 +484,24 @@ body {
   padding: 0 4px;
   border-radius: 4px;
   line-height: 1.2;
+  flex-shrink: 0;
 }
 
-.metric-reset-btn:hover {
+.metric-reset-btn:hover:not(:disabled) {
   background: rgba(88, 166, 255, 0.15);
   text-decoration: underline;
+}
+
+.metric-reset-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .metric-label {
   font-size: 0.72rem;
   text-transform: uppercase;
   color: var(--muted);
+  flex-shrink: 0;
 }
 
 .metric-value {
@@ -798,6 +841,48 @@ body {
 
 .event-type {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+
+.event-log-detailed {
+  gap: 8px;
+}
+
+.event-detail-card {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+
+.event-row-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.event-row-clickable:hover .event-type {
+  color: var(--accent);
+}
+
+.event-chevron {
+  width: 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.event-data-json {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: var(--muted);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .autosave-row {

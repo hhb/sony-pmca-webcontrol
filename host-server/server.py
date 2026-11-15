@@ -148,7 +148,8 @@ class ServerState:
 def fetch_latest_jpeg(camera_url: str, timeout: float = 15.0) -> bytes:
     url = f"{camera_url.rstrip('/')}/api/photos/latest?ts={int(threading.get_ident())}"
     req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    ctx = ssl._create_unverified_context() if url.lower().startswith("https://") else None
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         if resp.status != 200:
             raise RuntimeError(f"Camera returned HTTP {resp.status}")
         return resp.read()
@@ -356,12 +357,13 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
         m_merge = re.match(r"^/local-api/stacks/([A-Za-z0-9._-]+)/merge$", path)
         if m_merge:
-            self._drain_request_body()
             session = self.app_state.get_session(m_merge.group(1))
             if not session:
+                self._drain_request_body()
                 self._send_json(404, {"error": "Stack session not found"})
                 return
             if not self.app_state.openfocus_info.get("available"):
+                self._drain_request_body()
                 self._send_json(400, {"error": self.app_state.openfocus_info.get("reason") or "OpenFocus unavailable"})
                 return
             try:
@@ -439,14 +441,32 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
             self.send_response(resp.status, resp.reason)
             hop_by_hop = {"transfer-encoding", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade"}
+            has_content_length = False
+            content_type = ""
             for k, v in resp.getheaders():
-                if k.lower() in hop_by_hop:
+                kl = k.lower()
+                if kl in hop_by_hop:
                     continue
+                if kl == "content-length":
+                    has_content_length = True
+                elif kl == "content-type":
+                    content_type = v.lower()
                 self.send_header(k, v)
+            is_stream = (
+                not has_content_length
+                or "text/event-stream" in content_type
+                or "multipart/x-mixed-replace" in content_type
+            )
+            if not has_content_length:
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
 
+            if is_stream and conn.sock is not None:
+                conn.sock.settimeout(None)
+
             while True:
-                chunk = resp.read(16384)
+                chunk = resp.read1(16384)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
@@ -505,6 +525,24 @@ def ensure_self_signed_cert(cert_path: Path, key_path: Path) -> tuple[Path, Path
     return cert_path, key_path
 
 
+class HttpsThreadingServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that performs TLS handshakes inside worker threads."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 64
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            request.settimeout(10.0)
+            request.do_handshake()
+            request.settimeout(None)
+        except Exception:
+            self.shutdown_request(request)
+            return
+        super().process_request_thread(request, client_address)
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     cache_dir = Path.home() / ".cache" / "pmca-webcontrol"
@@ -550,9 +588,7 @@ def main() -> None:
         openfocus_info=openfocus_info,
     )
 
-    ThreadingHTTPServer.daemon_threads = True
-    ThreadingHTTPServer.allow_reuse_address = True
-    server = ThreadingHTTPServer((args.host, args.port), CompanionHandler)
+    server = HttpsThreadingServer((args.host, args.port), CompanionHandler)
     server.app_state = state  # type: ignore[attr-defined]
 
     cert_path, key_path = ensure_self_signed_cert(
@@ -561,7 +597,11 @@ def main() -> None:
     )
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    server.socket = ctx.wrap_socket(
+        server.socket,
+        server_side=True,
+        do_handshake_on_connect=False,
+    )
 
     print(f"PMCA Host Backend listening on https://{args.host}:{args.port}")
     print(f"Camera target : {state.camera_url}")

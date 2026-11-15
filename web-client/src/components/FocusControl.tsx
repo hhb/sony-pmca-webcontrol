@@ -20,6 +20,7 @@ interface FocusControlProps {
   mergeStatus?: string | null;
   measuredStep?: { step: number; seq: number } | null;
   onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
+  onCaptureStackShot?: (triggerShot: () => Promise<unknown>, signal?: AbortSignal) => Promise<void>;
   onStackSessionEnd?: (
     baseName: string,
     autoMerge: boolean,
@@ -47,6 +48,7 @@ export function FocusControl({
   mergeStatus,
   measuredStep,
   onStackSessionStart,
+  onCaptureStackShot,
   onStackSessionEnd,
 }: FocusControlProps) {
   const [busy, setBusy] = useState(false);
@@ -189,6 +191,7 @@ export function FocusControl({
         (targetPos) => {
           setTargetFocus(targetPos);
         },
+        onCaptureStackShot,
       );
       setStackStatus('Focus stack complete');
     } catch (err) {

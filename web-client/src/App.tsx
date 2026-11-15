@@ -22,13 +22,14 @@ import {
   triggerBackendStackMerge,
 } from './api/hostBackend';
 import { AutoSavePanel } from './components/AutoSavePanel';
+import { EventsPanel, type LoggedCameraEvent } from './components/EventsPanel';
 import { ExposureControl } from './components/ExposureControl';
 import { FocusControl } from './components/FocusControl';
 import { LiveViewPanel } from './components/LiveViewPanel';
 import { PhotoBrowser } from './components/PhotoBrowser';
 import { RpcInspector } from './components/RpcInspector';
 
-type TabKey = 'control' | 'photos' | 'rpc';
+type TabKey = 'control' | 'photos' | 'events' | 'rpc';
 
 function applyEventsToState(
   prev: CameraState | null,
@@ -105,7 +106,7 @@ export function App() {
 
   const [connected, setConnected] = useState(false);
   const [state, setState] = useState<CameraState | null>(null);
-  const [events, setEvents] = useState<CameraEvent[]>([]);
+  const [events, setEvents] = useState<LoggedCameraEvent[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>('control');
 
@@ -164,7 +165,8 @@ export function App() {
   const handledFilesRef = useRef<Set<string>>(new Set());
   const stackSessionRef = useRef<{ baseName: string; nextIndex: number } | null>(null);
   const backendMergeSessionRef = useRef<{ sessionId: string; pendingGrabs: Set<Promise<void>> } | null>(null);
-  const saveQueueRef = useRef<Array<{ name: string; url: string }>>([]);
+  const stackShotWaitersRef = useRef<Array<() => void>>([]);
+  const saveQueueRef = useRef<Array<{ name: string; url: string; resolve?: () => void }>>([]);
   const isProcessingQueueRef = useRef<boolean>(false);
 
   const processSaveQueue = useCallback(async () => {
@@ -187,6 +189,8 @@ export function App() {
         setLastSavedFile(task.name);
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        task.resolve?.();
       }
     }
     setSavingStatus(null);
@@ -194,9 +198,11 @@ export function App() {
   }, []);
 
   const queueSavePhoto = useCallback(
-    (task: { name: string; url: string }) => {
-      saveQueueRef.current.push(task);
-      void processSaveQueue();
+    (task: { name: string; url: string }): Promise<void> => {
+      return new Promise<void>((resolve) => {
+        saveQueueRef.current.push({ ...task, resolve });
+        void processSaveQueue();
+      });
     },
     [processSaveQueue],
   );
@@ -239,6 +245,8 @@ export function App() {
       }
       handledFilesRef.current.add(dedupKey);
 
+      const waiter = stackShotWaitersRef.current.shift();
+
       const mergeSession = backendMergeSessionRef.current;
       if (mergeSession) {
         const grabTask = grabLatestToBackendStack(mergeSession.sessionId, activeUrlRef.current)
@@ -249,18 +257,91 @@ export function App() {
         mergeSession.pendingGrabs.add(grabTask);
         void grabTask.finally(() => {
           mergeSession.pendingGrabs.delete(grabTask);
+          waiter?.();
         });
         return;
       }
 
-      if (!autoSaveRef.current) return;
+      if (!autoSaveRef.current) {
+        waiter?.();
+        return;
+      }
 
-      queueSavePhoto({
+      const saveTask = queueSavePhoto({
         name: nextCaptureFileName(),
         url: client.latestPhotoUrl(Date.now()),
       });
+      if (waiter) {
+        void saveTask.finally(() => {
+          waiter();
+        });
+      }
     },
     [client, nextCaptureFileName, queueSavePhoto],
+  );
+
+  const captureStackShot = useCallback(
+    async (triggerShot: () => Promise<unknown>, signal?: AbortSignal) => {
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+
+      let done = false;
+      let timerId: number | null = null;
+      let finishWaiter: () => void = () => {};
+      let cancelWaiter: (err: unknown) => void = () => {};
+
+      const waitForJpeg = new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        const cleanup = () => {
+          if (timerId !== null) {
+            window.clearTimeout(timerId);
+            timerId = null;
+          }
+          const idx = stackShotWaitersRef.current.indexOf(finishWaiter);
+          if (idx >= 0) {
+            stackShotWaitersRef.current.splice(idx, 1);
+          }
+          if (signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+        };
+        finishWaiter = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          resolve();
+        };
+        cancelWaiter = (err: unknown) => {
+          if (done) return;
+          done = true;
+          cleanup();
+          reject(err);
+        };
+
+        stackShotWaitersRef.current.push(finishWaiter);
+        timerId = window.setTimeout(() => {
+          finishWaiter();
+        }, 20000);
+        if (signal) {
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+      });
+
+      try {
+        await triggerShot();
+      } catch (err) {
+        cancelWaiter(err);
+      }
+
+      await waitForJpeg;
+    },
+    [],
   );
 
   const handleStackSessionStart = useCallback(
@@ -298,8 +379,8 @@ export function App() {
         setMergeStatus(`Verifying frames (0/${expectedShots})...`);
         setSavingStatus(`Verifying frames...`);
 
-        // Wait up to 5s for final Jpeg SSE events and in-flight backend grabs to finish
-        const deadline = Date.now() + 5000;
+        // Wait up to 10s for final Jpeg SSE events and in-flight backend grabs to finish
+        const deadline = Date.now() + 10000;
         let currentFrames = 0;
         while (true) {
           if (session.pendingGrabs.size > 0) {
@@ -335,7 +416,7 @@ export function App() {
           await new Promise((r) => window.setTimeout(r, 1000));
           const st = await getBackendStackStatus(baseName);
           if (st.status === 'done') {
-            queueSavePhoto({
+            await queueSavePhoto({
               name: mergedFileName,
               url: backendStackResultUrl(baseName),
             });
@@ -381,7 +462,12 @@ export function App() {
 
     const handleIncomingEvents = async (incoming: CameraEvent[]) => {
       if (cancelled || incoming.length === 0) return;
-      setEvents((prev) => [...incoming.slice().reverse(), ...prev].slice(0, 30));
+      const now = Date.now();
+      const logged: LoggedCameraEvent[] = incoming.map((ev) => ({
+        ...ev,
+        receivedAt: now,
+      }));
+      setEvents((prev) => [...logged.slice().reverse(), ...prev].slice(0, 200));
       let needFullRefresh = false;
       setState((prev) => {
         const applied = applyEventsToState(prev, incoming);
@@ -523,6 +609,13 @@ export function App() {
         </button>
         <button
           type="button"
+          className={`tab-btn ${tab === 'events' ? 'tab-active' : ''}`}
+          onClick={() => setTab('events')}
+        >
+          Events
+        </button>
+        <button
+          type="button"
           className={`tab-btn ${tab === 'rpc' ? 'tab-active' : ''}`}
           onClick={() => setTab('rpc')}
         >
@@ -571,6 +664,7 @@ export function App() {
                 mergeStatus={mergeStatus}
                 measuredStep={measuredStep}
                 onStackSessionStart={handleStackSessionStart}
+                onCaptureStackShot={captureStackShot}
                 onStackSessionEnd={handleStackSessionEnd}
               />
               <AutoSavePanel
@@ -594,21 +688,6 @@ export function App() {
                 lastSavedFile={lastSavedFile}
                 savingStatus={savingStatus}
               />
-              {events.length > 0 && (
-                <section className="panel">
-                  <div className="panel-header">
-                    <span className="panel-title">Recent Events</span>
-                  </div>
-                  <div className="event-log">
-                    {events.slice(0, 8).map((ev) => (
-                      <div key={ev.seq} className="event-row">
-                        <span className="badge">#{ev.seq}</span>
-                        <span className="event-type">{ev.type}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
             </div>
           </div>
         )}
@@ -619,6 +698,10 @@ export function App() {
             connected={connected}
             onError={setErrorMsg}
           />
+        )}
+
+        {tab === 'events' && (
+          <EventsPanel events={events} onClear={() => setEvents([])} />
         )}
 
         {tab === 'rpc' && <RpcInspector client={client} connected={connected} />}
