@@ -328,32 +328,19 @@ export function App() {
   );
 
   const eventsCidRef = useRef<string>(getEventsClientId());
-  const [pageVisible, setPageVisible] = useState<boolean>(() =>
-    typeof document === 'undefined' ? true : !document.hidden,
-  );
 
   useEffect(() => {
-    const onVisibilityChange = () => {
-      setPageVisible(!document.hidden);
-    };
     const onPageHide = () => {
       client.closeEventsStream(eventsCidRef.current);
     };
-    document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('pagehide', onPageHide);
     return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
     };
   }, [client]);
 
-  // Initial state fetch + SSE /api/events/stream (disconnects when tab is inactive, resyncs on reconnect)
+  // Initial state fetch + SSE /api/events/stream (kept open across tab switches so captures are never missed)
   useEffect(() => {
-    if (!pageVisible) {
-      client.closeEventsStream(eventsCidRef.current);
-      return;
-    }
-
     let cancelled = false;
     let eventSource: EventSource | null = null;
     let needsResync = false;
@@ -423,7 +410,7 @@ export function App() {
       }
       client.closeEventsStream(eventsCidRef.current);
     };
-  }, [client, handleCaptureEvent, pageVisible, refreshState]);
+  }, [client, handleCaptureEvent, refreshState]);
 
   const handleConnectSubmit = (e: React.FormEvent) => {
     e.preventDefault();
