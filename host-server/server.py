@@ -110,13 +110,10 @@ class ServerState:
     def __init__(
         self,
         camera_url: str,
-        save_dir: Path,
         web_index: Path,
         openfocus_info: dict[str, Any],
     ) -> None:
         self.camera_url = camera_url.rstrip("/")
-        self.save_dir = save_dir
-        self.save_dir.mkdir(parents=True, exist_ok=True)
         self.web_index = web_index
         self.openfocus_info = openfocus_info
         self.stack_root = Path(tempfile.gettempdir()) / "pmca-openfocus"
@@ -159,8 +156,6 @@ def fetch_latest_jpeg(camera_url: str, timeout: float = 15.0) -> bytes:
 def run_openfocus_merge(
     state: ServerState,
     session: StackSession,
-    save_to_backend: bool,
-    filename: str | None,
 ) -> None:
     try:
         info = state.openfocus_info
@@ -197,12 +192,6 @@ def run_openfocus_merge(
                 shutil.copyfile(jpgs[0], session.output_file)
             else:
                 raise RuntimeError("OpenFocus completed without producing output.jpg")
-
-        if save_to_backend:
-            target_name = sanitize_filename(filename or f"{session.session_id}.jpg", f"{session.session_id}.jpg")
-            target_path = state.save_dir / target_name
-            shutil.copyfile(session.output_file, target_path)
-            session.saved_filename = target_name
 
         with session.lock:
             session.status = "done"
@@ -258,7 +247,6 @@ class CompanionHandler(BaseHTTPRequestHandler):
             self._send_json(200, {
                 "backend": True,
                 "cameraUrl": self.app_state.camera_url,
-                "saveDir": str(self.app_state.save_dir),
                 "openfocus": {
                     "available": bool(self.app_state.openfocus_info.get("available")),
                     "reason": self.app_state.openfocus_info.get("reason", ""),
@@ -325,24 +313,6 @@ class CompanionHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
-        if path == "/local-api/photos/save-latest":
-            try:
-                body = self._read_json_body()
-                filename = sanitize_filename(str(body.get("filename") or "capture.jpg"))
-                cam_url = str(body.get("cameraUrl") or self.app_state.camera_url)
-                jpeg_bytes = fetch_latest_jpeg(cam_url)
-                target = self.app_state.save_dir / filename
-                target.write_bytes(jpeg_bytes)
-                self._send_json(200, {
-                    "ok": True,
-                    "filename": filename,
-                    "path": str(target),
-                    "bytes": len(jpeg_bytes),
-                })
-            except Exception as exc:
-                self._send_json(500, {"error": str(exc)})
-            return
-
         if path == "/local-api/stacks":
             try:
                 body = self._read_json_body()
@@ -387,9 +357,6 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": self.app_state.openfocus_info.get("reason") or "OpenFocus unavailable"})
                 return
             try:
-                body = self._read_json_body()
-                save_to_backend = bool(body.get("saveToBackend"))
-                filename = body.get("filename")
                 with session.lock:
                     if session.frame_count < 2:
                         self._send_json(400, {"error": f"Need at least 2 frames to merge (got {session.frame_count})"})
@@ -401,7 +368,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     session.error = None
                 worker = threading.Thread(
                     target=run_openfocus_merge,
-                    args=(self.app_state, session, save_to_backend, str(filename) if filename else None),
+                    args=(self.app_state, session),
                     daemon=True,
                 )
                 worker.start()
@@ -491,11 +458,6 @@ def main() -> None:
         help="Camera base URL (default: http://192.168.0.250:8080)",
     )
     parser.add_argument(
-        "--save-dir",
-        default=os.environ.get("SAVE_DIR", str(repo_root / "captures")),
-        help="Directory for backend Auto-Save photos (default: ./captures)",
-    )
-    parser.add_argument(
         "--openfocus-dir",
         default=os.environ.get("OPENFOCUS_DIR"),
         help="Path to Xinzhe99/OpenFocus repository (optional if 'openfocus' is in PATH)",
@@ -515,7 +477,6 @@ def main() -> None:
     openfocus_info = detect_openfocus(args.openfocus_dir, args.openfocus_python)
     state = ServerState(
         camera_url=args.camera,
-        save_dir=Path(args.save_dir).expanduser().resolve(),
         web_index=Path(args.web_dist).expanduser().resolve(),
         openfocus_info=openfocus_info,
     )
@@ -527,7 +488,6 @@ def main() -> None:
 
     print(f"PMCA Host Backend listening on http://{args.host}:{args.port}")
     print(f"Camera target : {state.camera_url}")
-    print(f"Save directory: {state.save_dir}")
     print(f"OpenFocus     : {openfocus_info['available']} - {openfocus_info['reason']}")
     try:
         server.serve_forever()

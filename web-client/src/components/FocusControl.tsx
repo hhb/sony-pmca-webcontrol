@@ -398,29 +398,28 @@ export function FocusControl({
           </div>
         </div>
 
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label className={`checkbox-row ${!openFocusAvailable ? 'is-disabled' : ''}`}>
-            <input
-              type="checkbox"
-              disabled={!openFocusAvailable || stackRunning}
-              checked={openFocusAvailable && autoMerge}
-              onChange={(e) => onAutoMergeChange(e.target.checked)}
-            />
-            <span>Auto Merge (OpenFocus)</span>
-          </label>
-          {!openFocusAvailable && (
-            <span className="info-tooltip-wrap">
-              <span className="info-icon" tabIndex={0} aria-label={openFocusReason}>
-                i
+        <div className="stack-actions" style={{ flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 'auto' }}>
+            <label className={`checkbox-row ${!openFocusAvailable ? 'is-disabled' : ''}`}>
+              <input
+                type="checkbox"
+                disabled={!openFocusAvailable || stackRunning}
+                checked={openFocusAvailable && autoMerge}
+                onChange={(e) => onAutoMergeChange(e.target.checked)}
+              />
+              <span>Auto Merge</span>
+            </label>
+            {!openFocusAvailable && (
+              <span className="info-tooltip-wrap">
+                <span className="info-icon" tabIndex={0} aria-label={openFocusReason}>
+                  i
+                </span>
+                <span className="info-tooltip-bubble">{openFocusReason}</span>
               </span>
-              <span className="info-tooltip-bubble">{openFocusReason}</span>
-            </span>
-          )}
-        </div>
-
-        <div className="stack-actions">
+            )}
+          </div>
           {(mergeStatus || stackStatus) && (
-            <span className="muted-tag" style={{ marginRight: 'auto' }}>
+            <span className="muted-tag">
               {mergeStatus ?? stackStatus}
             </span>
           )}

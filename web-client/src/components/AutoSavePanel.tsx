@@ -6,7 +6,7 @@ interface AutoSavePanelProps {
   dirName: string | null;
   onPickDirectory: () => void;
   backendAvailable: boolean;
-  backendSaveDir?: string;
+  unavailableReason: string;
   savedCount: number;
   lastSavedFile: string | null;
   savingStatus: string | null;
@@ -18,60 +18,50 @@ export function AutoSavePanel({
   dirName,
   onPickDirectory,
   backendAvailable,
-  backendSaveDir,
+  unavailableReason,
   savedCount,
   lastSavedFile,
   savingStatus,
 }: AutoSavePanelProps) {
   const pickerSupported = isDirectoryPickerSupported();
+  const effectiveEnabled = backendAvailable && enabled;
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span>Auto-Save</span>
+          <span className={!backendAvailable ? 'is-disabled' : undefined} style={!backendAvailable ? { opacity: 0.55 } : undefined}>
+            Auto-Save
+          </span>
+          {!backendAvailable && (
+            <span className="info-tooltip-wrap">
+              <span className="info-icon" tabIndex={0} aria-label={unavailableReason}>
+                i
+              </span>
+              <span className="info-tooltip-bubble">{unavailableReason}</span>
+            </span>
+          )}
           {savedCount > 0 && <span className="badge">{savedCount} saved</span>}
         </div>
         <button
           type="button"
-          className={`btn btn-sm ${enabled ? 'btn-active' : ''}`}
+          className={`btn btn-sm ${effectiveEnabled ? 'btn-active' : ''}`}
+          disabled={!backendAvailable}
           onClick={() => onToggle(!enabled)}
         >
-          {enabled ? 'ON' : 'OFF'}
+          {effectiveEnabled ? 'ON' : 'OFF'}
         </button>
       </div>
 
-      <div className="autosave-row">
-        {dirName ? (
+      <div className={`autosave-row ${!backendAvailable ? 'is-disabled' : ''}`} style={!backendAvailable ? { opacity: 0.55 } : undefined}>
+        {pickerSupported ? (
           <button
             type="button"
-            className="btn btn-sm"
+            className={`btn btn-sm ${effectiveEnabled && !dirName ? 'btn-primary' : ''}`}
+            disabled={!backendAvailable}
             onClick={onPickDirectory}
           >
-            {`Folder: ${dirName}`}
-          </button>
-        ) : backendAvailable ? (
-          <>
-            <span className="muted-tag" title={backendSaveDir}>
-              {`Backend folder: ${backendSaveDir || './captures'}`}
-            </span>
-            {pickerSupported && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={onPickDirectory}
-              >
-                Use Browser Folder
-              </button>
-            )}
-          </>
-        ) : pickerSupported ? (
-          <button
-            type="button"
-            className={`btn btn-sm ${enabled ? 'btn-primary' : ''}`}
-            onClick={onPickDirectory}
-          >
-            {enabled ? 'Select Folder to Save' : 'Choose Local Folder'}
+            {dirName ? `Folder: ${dirName}` : effectiveEnabled ? 'Select Folder to Save' : 'Choose Local Folder'}
           </button>
         ) : (
           <span className="muted-tag">

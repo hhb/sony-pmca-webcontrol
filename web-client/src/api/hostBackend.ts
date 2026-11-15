@@ -1,7 +1,6 @@
 export interface HostCapabilities {
   backend: boolean;
   cameraUrl?: string;
-  saveDir?: string;
   openfocus: {
     available: boolean;
     reason: string;
@@ -13,7 +12,6 @@ export interface StackMergeStatus {
   status: 'collecting' | 'merging' | 'done' | 'error';
   frameCount: number;
   error?: string | null;
-  savedFilename?: string | null;
 }
 
 const UNAVAILABLE_CAPS: HostCapabilities = {
@@ -43,22 +41,6 @@ export async function fetchHostCapabilities(): Promise<HostCapabilities> {
   } finally {
     window.clearTimeout(timer);
   }
-}
-
-export async function saveLatestPhotoToBackend(
-  filename: string,
-  cameraUrl?: string,
-): Promise<{ ok: boolean; filename: string; path: string }> {
-  const res = await fetch('/local-api/photos/save-latest', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename, cameraUrl }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error || `Backend save failed (HTTP ${res.status})`);
-  }
-  return data;
 }
 
 export async function createBackendStackSession(
@@ -92,14 +74,11 @@ export async function grabLatestToBackendStack(
   return Number(data.frameCount ?? 0);
 }
 
-export async function triggerBackendStackMerge(
-  sessionId: string,
-  options?: { saveToBackend?: boolean; filename?: string },
-): Promise<void> {
+export async function triggerBackendStackMerge(sessionId: string): Promise<void> {
   const res = await fetch(`/local-api/stacks/${encodeURIComponent(sessionId)}/merge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(options ?? {}),
+    body: JSON.stringify({}),
   });
   const data = await res.json();
   if (!res.ok) {

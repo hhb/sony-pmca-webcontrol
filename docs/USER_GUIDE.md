@@ -76,10 +76,8 @@ Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/
 * **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and remote shutter release.
 * **Focus & Stacking**: Multi-speed manual focus stepping, power zoom, and automated closed-loop **Focus Bracketing / Focus Stacking** between `Start A` and `End B`.
   * Check **Auto** next to `Shots` to automatically calculate the shot count (`max(2, |End B - Start A| + 1)`).
-  * Check **Auto Merge (OpenFocus)** (enabled when running via the host companion backend with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) installed) to align and merge the stack on the host backend and save **only the single merged `.jpg`** (`capture_YYYYMMDD_HHMMSS.jpg`). When the host backend or OpenFocus is unavailable, the checkbox is greyed out with an `i` tooltip explaining why.
-* **Auto-Save**: Automatically saves newly captured photos using consistent local timestamps (`capture_YYYYMMDD_HHMMSS.jpg` for single shots, and `capture_YYYYMMDD_HHMMSS_001.jpg`, `_002.jpg`, ... for focus stacks). Supports:
-  * **Host Companion Backend**: Saves directly to `--save-dir` (default `./captures`) without browser permission prompts.
-  * **Browser Folder / Download**: Saves via the File System Access API (`showDirectoryPicker`) or falls back to standard browser downloads.
+  * Check **Auto Merge (OpenFocus)** (enabled when running via the host companion backend with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) installed) to align and merge the stack on the host backend and save **only the single merged `.jpg`** (`capture_YYYYMMDD_HHMMSS.jpg`) to your browser's local machine. When the host backend or OpenFocus is unavailable, the checkbox is greyed out with an `i` tooltip explaining why.
+* **Auto-Save**: Automatically saves newly captured photos to the **browser machine's local folder** (via File System Access API `showDirectoryPicker` or browser download fallback) using consistent local timestamps (`capture_YYYYMMDD_HHMMSS.jpg` for single shots, and `capture_YYYYMMDD_HHMMSS_001.jpg`, `_002.jpg`, ... for focus stacks). Requires the host companion backend (`capabilities.backend === true`); when no backend is detected, Auto-Save is greyed out with an `i` tooltip explaining why.
 * **Photo Browser**: Browse SD card `DCIM` folders, preview photos, and download `.JPG` / `.ARW` files.
 * **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
 
@@ -87,12 +85,12 @@ Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/
 > * Opening the single-file `index.html` directly via `file://` works for LiveView, exposure, focus stacking, and photo browsing (via direct CORS requests to the camera), **except** browsers do not allow `showDirectoryPicker` on `file://` pages — Auto-Save will automatically fall back to standard browser downloads into your default Downloads folder.
 > * To save silently into a chosen local folder without the host backend, open the UI from a secure context: either run `cd web-client && npm run dev` (local HTTPS + `/api` proxy) or serve `dist/index.html` on `http://localhost` (e.g., `python3 -m http.server 8000` inside `web-client/dist/`).
 
-### Option B: Host Companion Backend (`host-server/server.py`, Recommended for Stacking)
-Run the zero-dependency Python 3 companion server on your computer to serve `web-client/dist/index.html`, proxy `/api/*` to the camera, enable direct disk Auto-Save, and unlock **OpenFocus** auto-merging:
+### Option B: Host Companion Backend (`host-server/server.py`, Recommended for Auto-Save & Stacking)
+Run the zero-dependency Python 3 companion server on your computer to serve `web-client/dist/index.html`, proxy `/api/*` to the camera, enable browser local **Auto-Save**, and unlock **OpenFocus** auto-merging:
 ```bash
 python3 host-server/server.py --camera http://<camera-ip>:8080 --openfocus-dir /path/to/OpenFocus
 ```
-Then open `http://localhost:8000` in your browser. Use `--save-dir` to customize where auto-saved photos are written (defaults to `./captures`).
+Then open `http://localhost:8000` in your browser.
 
 ### Option C: Built-in Fallback UI
 Opening `http://<camera-ip>:8080` directly in any browser on your LAN serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.

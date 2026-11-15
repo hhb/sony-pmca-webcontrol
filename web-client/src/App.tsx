@@ -19,7 +19,6 @@ import {
   getBackendStackStatus,
   grabLatestToBackendStack,
   type HostCapabilities,
-  saveLatestPhotoToBackend,
   triggerBackendStackMerge,
 } from './api/hostBackend';
 import { AutoSavePanel } from './components/AutoSavePanel';
@@ -139,8 +138,6 @@ export function App() {
 
   const seqRef = useRef<number>(0);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
-  const hostCapsRef = useRef<HostCapabilities>(hostCaps);
-  hostCapsRef.current = hostCaps;
   const activeUrlRef = useRef<string>(activeUrl);
   activeUrlRef.current = activeUrl;
 
@@ -148,7 +145,7 @@ export function App() {
     void fetchHostCapabilities().then(setHostCaps);
   }, []);
   const autoSaveRef = useRef<boolean>(false);
-  autoSaveRef.current = autoSaveEnabled;
+  autoSaveRef.current = hostCaps.backend && autoSaveEnabled;
 
   const refreshState = useCallback(async () => {
     try {
@@ -166,7 +163,7 @@ export function App() {
   const handledFilesRef = useRef<Set<string>>(new Set());
   const stackSessionRef = useRef<{ baseName: string; nextIndex: number } | null>(null);
   const backendMergeSessionRef = useRef<{ sessionId: string; pendingGrabs: Set<Promise<void>> } | null>(null);
-  const saveQueueRef = useRef<Array<{ name: string; url?: string; useBackend?: boolean; cameraUrl?: string }>>([]);
+  const saveQueueRef = useRef<Array<{ name: string; url: string }>>([]);
   const isProcessingQueueRef = useRef<boolean>(false);
 
   const processSaveQueue = useCallback(async () => {
@@ -177,17 +174,13 @@ export function App() {
       if (!task) break;
       setSavingStatus(`Saving ${task.name}...`);
       try {
-        if (task.useBackend) {
-          await saveLatestPhotoToBackend(task.name, task.cameraUrl);
-        } else if (task.url) {
-          const res = await fetch(task.url);
-          if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-          const blob = await res.blob();
-          if (dirHandleRef.current) {
-            await saveBlobToDirectory(dirHandleRef.current, task.name, blob);
-          } else {
-            triggerBrowserDownload(task.name, blob);
-          }
+        const res = await fetch(task.url);
+        if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (dirHandleRef.current) {
+          await saveBlobToDirectory(dirHandleRef.current, task.name, blob);
+        } else {
+          triggerBrowserDownload(task.name, blob);
         }
         setSavedCount((c) => c + 1);
         setLastSavedFile(task.name);
@@ -200,7 +193,7 @@ export function App() {
   }, []);
 
   const queueSavePhoto = useCallback(
-    (task: { name: string; url?: string; useBackend?: boolean; cameraUrl?: string }) => {
+    (task: { name: string; url: string }) => {
       saveQueueRef.current.push(task);
       void processSaveQueue();
     },
@@ -261,19 +254,10 @@ export function App() {
 
       if (!autoSaveRef.current) return;
 
-      const fileName = nextCaptureFileName();
-      if (hostCapsRef.current.backend && !dirHandleRef.current) {
-        queueSavePhoto({
-          name: fileName,
-          useBackend: true,
-          cameraUrl: activeUrlRef.current,
-        });
-      } else {
-        queueSavePhoto({
-          name: fileName,
-          url: client.latestPhotoUrl(Date.now()),
-        });
-      }
+      queueSavePhoto({
+        name: nextCaptureFileName(),
+        url: client.latestPhotoUrl(Date.now()),
+      });
     },
     [client, nextCaptureFileName, queueSavePhoto],
   );
@@ -311,29 +295,19 @@ export function App() {
       }
 
       const mergedFileName = `${baseName}.jpg`;
-      const saveToBackend = hostCapsRef.current.backend && !dirHandleRef.current && autoSaveRef.current;
       try {
         setMergeStatus('Merging with OpenFocus...');
         setSavingStatus('Merging with OpenFocus...');
-        await triggerBackendStackMerge(baseName, {
-          saveToBackend,
-          filename: mergedFileName,
-        });
+        await triggerBackendStackMerge(baseName);
 
         while (true) {
           await new Promise((r) => window.setTimeout(r, 1000));
           const st = await getBackendStackStatus(baseName);
           if (st.status === 'done') {
-            if (saveToBackend) {
-              setSavedCount((c) => c + 1);
-              setLastSavedFile(st.savedFilename || mergedFileName);
-              setSavingStatus(null);
-            } else {
-              queueSavePhoto({
-                name: mergedFileName,
-                url: backendStackResultUrl(baseName),
-              });
-            }
+            queueSavePhoto({
+              name: mergedFileName,
+              url: backendStackResultUrl(baseName),
+            });
             setMergeStatus('Merged (1 photo saved)');
             break;
           }
@@ -577,7 +551,8 @@ export function App() {
               <AutoSavePanel
                 enabled={autoSaveEnabled}
                 onToggle={(next) => {
-                  if (next && !hostCaps.backend && isDirectoryPickerSupported() && !dirHandleRef.current) {
+                  if (!hostCaps.backend) return;
+                  if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
                     void handlePickDirectory();
                   } else {
                     setAutoSaveEnabled(next);
@@ -589,7 +564,7 @@ export function App() {
                 dirName={saveDirName}
                 onPickDirectory={() => void handlePickDirectory()}
                 backendAvailable={hostCaps.backend}
-                backendSaveDir={hostCaps.saveDir}
+                unavailableReason="Host backend not detected. Browser local Auto-Save requires running the UI via host-server/server.py due to browser filesystem permissions."
                 savedCount={savedCount}
                 lastSavedFile={lastSavedFile}
                 savingStatus={savingStatus}
