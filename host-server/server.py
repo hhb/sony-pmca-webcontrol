@@ -365,9 +365,17 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": self.app_state.openfocus_info.get("reason") or "OpenFocus unavailable"})
                 return
             try:
+                body = self._read_json_body()
+                expected_count = body.get("expectedCount")
                 with session.lock:
                     if session.frame_count < 2:
                         self._send_json(400, {"error": f"Need at least 2 frames to merge (got {session.frame_count})"})
+                        return
+                    if isinstance(expected_count, int) and session.frame_count < expected_count:
+                        self._send_json(
+                            400,
+                            {"error": f"Incomplete stack frames: expected {expected_count}, got {session.frame_count}"},
+                        )
                         return
                     if session.status == "merging":
                         self._send_json(202, {"ok": True, "status": "merging"})

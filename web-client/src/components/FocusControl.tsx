@@ -18,7 +18,12 @@ interface FocusControlProps {
   onAutoMergeChange: (checked: boolean) => void;
   mergeStatus?: string | null;
   onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
-  onStackSessionEnd?: (baseName: string, autoMerge: boolean, aborted: boolean) => Promise<void> | void;
+  onStackSessionEnd?: (
+    baseName: string,
+    autoMerge: boolean,
+    aborted: boolean,
+    expectedShots: number,
+  ) => Promise<void> | void;
 }
 
 function formatCaptureBaseName(): string {
@@ -175,7 +180,7 @@ export function FocusControl({
       abortRef.current = null;
       setStackRunning(false);
       setBusy(false);
-      void onStackSessionEnd?.(runBaseName, useAutoMerge, aborted);
+      void onStackSessionEnd?.(runBaseName, useAutoMerge, aborted, Math.max(2, effectiveSteps));
       prefixClearTimerRef.current = window.setTimeout(() => {
         onStackSessionChange?.(null);
         prefixClearTimerRef.current = null;

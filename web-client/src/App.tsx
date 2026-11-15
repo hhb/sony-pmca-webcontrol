@@ -276,19 +276,17 @@ export function App() {
   );
 
   const handleStackSessionEnd = useCallback(
-    async (baseName: string, useAutoMerge: boolean, aborted: boolean) => {
+    async (baseName: string, useAutoMerge: boolean, aborted: boolean, expectedShots: number) => {
       if (!useAutoMerge || !backendMergeSessionRef.current) return;
       const session = backendMergeSessionRef.current;
-      // Allow brief window for final Jpeg SSE event to arrive before flushing grabs
-      await new Promise((r) => window.setTimeout(r, 1500));
-      if (session.pendingGrabs.size > 0) {
-        await Promise.allSettled(Array.from(session.pendingGrabs));
-      }
-      if (backendMergeSessionRef.current === session) {
-        backendMergeSessionRef.current = null;
-      }
 
       if (aborted) {
+        if (session.pendingGrabs.size > 0) {
+          await Promise.allSettled(Array.from(session.pendingGrabs));
+        }
+        if (backendMergeSessionRef.current === session) {
+          backendMergeSessionRef.current = null;
+        }
         await deleteBackendStackSession(baseName);
         setMergeStatus(null);
         return;
@@ -296,9 +294,41 @@ export function App() {
 
       const mergedFileName = `${baseName}.jpg`;
       try {
-        setMergeStatus('Merging with OpenFocus...');
+        setMergeStatus(`Verifying frames (0/${expectedShots})...`);
+        setSavingStatus(`Verifying frames...`);
+
+        // Wait up to 5s for final Jpeg SSE events and in-flight backend grabs to finish
+        const deadline = Date.now() + 5000;
+        let currentFrames = 0;
+        while (true) {
+          if (session.pendingGrabs.size > 0) {
+            await Promise.allSettled(Array.from(session.pendingGrabs));
+          }
+          const stCheck = await getBackendStackStatus(baseName);
+          currentFrames = stCheck.frameCount;
+          setMergeStatus(`Verifying frames (${currentFrames}/${expectedShots})...`);
+          if (currentFrames >= expectedShots && session.pendingGrabs.size === 0) {
+            break;
+          }
+          if (Date.now() >= deadline) {
+            break;
+          }
+          await new Promise((r) => window.setTimeout(r, 300));
+        }
+
+        if (backendMergeSessionRef.current === session) {
+          backendMergeSessionRef.current = null;
+        }
+
+        if (currentFrames < expectedShots) {
+          throw new Error(
+            `Incomplete stack: expected ${expectedShots} photos, got ${currentFrames}. Skipping merge.`,
+          );
+        }
+
+        setMergeStatus(`Merging ${currentFrames} frames with OpenFocus...`);
         setSavingStatus('Merging with OpenFocus...');
-        await triggerBackendStackMerge(baseName);
+        await triggerBackendStackMerge(baseName, expectedShots);
 
         while (true) {
           await new Promise((r) => window.setTimeout(r, 1000));
@@ -308,7 +338,7 @@ export function App() {
               name: mergedFileName,
               url: backendStackResultUrl(baseName),
             });
-            setMergeStatus('Merged (1 photo saved)');
+            setMergeStatus(`Merged ${currentFrames} frames (1 photo saved)`);
             break;
           }
           if (st.status === 'error') {
@@ -316,6 +346,9 @@ export function App() {
           }
         }
       } catch (err) {
+        if (backendMergeSessionRef.current === session) {
+          backendMergeSessionRef.current = null;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         setErrorMsg(msg);
         setMergeStatus(`Merge error: ${msg}`);

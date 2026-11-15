@@ -74,11 +74,14 @@ export async function grabLatestToBackendStack(
   return Number(data.frameCount ?? 0);
 }
 
-export async function triggerBackendStackMerge(sessionId: string): Promise<void> {
+export async function triggerBackendStackMerge(
+  sessionId: string,
+  expectedCount?: number,
+): Promise<void> {
   const res = await fetch(`/local-api/stacks/${encodeURIComponent(sessionId)}/merge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(typeof expectedCount === 'number' ? { expectedCount } : {}),
   });
   const data = await res.json();
   if (!res.ok) {
