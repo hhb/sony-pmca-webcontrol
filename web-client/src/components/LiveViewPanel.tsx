@@ -603,6 +603,7 @@ export function LiveViewPanel({
         <div className="panel-title">
           <span>LiveView</span>
           <span className="badge">{streaming && pageVisible && connected ? `${fps} FPS` : 'PAUSED'}</span>
+          {rotationDeg !== 0 && <span className="badge">{rotationDeg}°</span>}
         </div>
         <div className="toolbar-row">
           <button
@@ -652,14 +653,10 @@ export function LiveViewPanel({
           >
             ↻
           </button>
-          {rotationDeg !== 0 && <span className="badge">{rotationDeg}°</span>}
         </div>
       </div>
 
-      <div
-        className="liveview-stage"
-        style={rotationDeg % 180 !== 0 ? { aspectRatio: '2 / 3' } : undefined}
-      >
+      <div className="liveview-stage">
         <canvas
           ref={canvasRef}
           className="liveview-canvas"
@@ -729,7 +726,7 @@ export function LiveViewPanel({
             onClick={() => setToolMode('measure')}
             title="Click a textured sloped region to auto-measure focus stack step"
           >
-            📏 Measure Step
+            📏 Measure
           </button>
           <button
             type="button"

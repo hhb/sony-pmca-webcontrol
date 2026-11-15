@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
@@ -27,6 +27,7 @@ export function ExposureControl({
   const [localIso, setLocalIso] = useState<number | null>(null);
   const [isoOptions, setIsoOptions] = useState<number[]>(ISO_PRESETS);
   const [sceneMode, setSceneMode] = useState<string | null>(null);
+  const lastManualIsoRef = useRef<number>(100);
 
   const ec = typeof state?.exposureCompensation === 'object' ? state.exposureCompensation : undefined;
   const stateEvIndex =
@@ -164,6 +165,20 @@ export function ExposureControl({
     state?.shutter?.currentShutterSpeed_d,
   );
   const isoValue = localIso !== null ? localIso : state?.autoIso;
+  const autoIso = isoValue === 0;
+  if (typeof isoValue === 'number' && isoValue > 0) {
+    lastManualIsoRef.current = isoValue;
+  }
+
+  const changeIso = async (val: number) => {
+    setLocalIso(val);
+    try {
+      await client.setIso(val);
+    } catch (err) {
+      setLocalIso(null);
+      throw err;
+    }
+  };
   const evDisplay = connected ? formatEv(evIndex, evStep) : '--';
 
   return (
@@ -185,7 +200,20 @@ export function ExposureControl({
 
       <div className="exposure-grid">
         <div className="metric-card">
-          <div className="metric-label">Aperture</div>
+          <div className="metric-header-row">
+            <span className="metric-label">Aperture</span>
+            <label className="metric-auto-toggle">
+              <input
+                type="checkbox"
+                disabled={!connected || busy}
+                checked={autoAperture}
+                onChange={(e) =>
+                  void runAction(() => setExposureAutoFlags(e.target.checked, autoShutter))
+                }
+              />
+              <span>Auto</span>
+            </label>
+          </div>
           <div className="metric-value">{aperture}</div>
           <div className="stepper-row">
             <button
@@ -207,21 +235,23 @@ export function ExposureControl({
               F+
             </button>
           </div>
-          <label className="checkbox-row" style={{ marginTop: 6 }}>
-            <input
-              type="checkbox"
-              disabled={!connected || busy}
-              checked={autoAperture}
-              onChange={(e) =>
-                void runAction(() => setExposureAutoFlags(e.target.checked, autoShutter))
-              }
-            />
-            <span>Auto</span>
-          </label>
         </div>
 
         <div className="metric-card">
-          <div className="metric-label">Shutter</div>
+          <div className="metric-header-row">
+            <span className="metric-label">Shutter</span>
+            <label className="metric-auto-toggle">
+              <input
+                type="checkbox"
+                disabled={!connected || busy}
+                checked={autoShutter}
+                onChange={(e) =>
+                  void runAction(() => setExposureAutoFlags(autoAperture, e.target.checked))
+                }
+              />
+              <span>Auto</span>
+            </label>
+          </div>
           <div className="metric-value">{shutter}</div>
           <div className="stepper-row">
             <button
@@ -231,7 +261,7 @@ export function ExposureControl({
               onClick={() => runAction(() => client.decrementShutter())}
               title="Slower shutter"
             >
-              Slower
+              S-
             </button>
             <button
               type="button"
@@ -240,43 +270,39 @@ export function ExposureControl({
               onClick={() => runAction(() => client.incrementShutter())}
               title="Faster shutter"
             >
-              Faster
+              S+
             </button>
           </div>
-          <label className="checkbox-row" style={{ marginTop: 6 }}>
-            <input
-              type="checkbox"
-              disabled={!connected || busy}
-              checked={autoShutter}
-              onChange={(e) =>
-                void runAction(() => setExposureAutoFlags(autoAperture, e.target.checked))
-              }
-            />
-            <span>Auto</span>
-          </label>
         </div>
 
         <div className="metric-card">
-          <div className="metric-label">ISO</div>
+          <div className="metric-header-row">
+            <span className="metric-label">ISO</span>
+            <label className="metric-auto-toggle">
+              <input
+                type="checkbox"
+                disabled={!connected || busy}
+                checked={autoIso}
+                onChange={(e) => {
+                  const target = e.target.checked ? 0 : lastManualIsoRef.current;
+                  void runAction(() => changeIso(target));
+                }}
+              />
+              <span>Auto</span>
+            </label>
+          </div>
           <div className="metric-value">
             {isoValue === undefined ? '--' : isoValue === 0 ? 'AUTO' : isoValue}
           </div>
           <select
             className="select-input"
-            disabled={!connected || busy}
+            style={{ width: '100%' }}
+            disabled={!connected || busy || autoIso}
             value={isoValue ?? ''}
             onChange={(e) => {
               const val = Number(e.target.value);
               if (!Number.isNaN(val)) {
-                setLocalIso(val);
-                void runAction(async () => {
-                  try {
-                    await client.setIso(val);
-                  } catch (err) {
-                    setLocalIso(null);
-                    throw err;
-                  }
-                });
+                void runAction(() => changeIso(val));
               }
             }}
           >
