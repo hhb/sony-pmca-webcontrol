@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
+  computeFocusStackPositions,
   ZOOM_TELE,
   ZOOM_WIDE,
 } from '../api/cameraClient';
@@ -50,8 +51,7 @@ export function FocusControl({
   const [stackRunning, setStackRunning] = useState(false);
   const [startPos, setStartPos] = useState<string>('');
   const [endPos, setEndPos] = useState<string>('');
-  const [steps, setSteps] = useState<number>(5);
-  const [autoShots, setAutoShots] = useState<boolean>(false);
+  const [stepSize, setStepSize] = useState<number>(1);
   const [settleMs, setSettleMs] = useState<number>(400);
   const [stackStatus, setStackStatus] = useState<string | null>(null);
   const [targetFocus, setTargetFocus] = useState<number | null>(null);
@@ -62,11 +62,10 @@ export function FocusControl({
 
   const parsedA = startPos !== '' ? Number(startPos) : NaN;
   const parsedB = endPos !== '' ? Number(endPos) : NaN;
-  const computedAutoShots =
+  const plannedShots =
     !Number.isNaN(parsedA) && !Number.isNaN(parsedB)
-      ? Math.max(2, Math.abs(parsedB - parsedA) + 1)
+      ? computeFocusStackPositions(parsedA, parsedB, stepSize).length
       : null;
-  const effectiveSteps = autoShots ? (computedAutoShots ?? steps) : steps;
 
   const currentFocus = state?.focus?.currentPosition;
   const maxFocus = state?.focus?.maxPosition;
@@ -146,6 +145,7 @@ export function FocusControl({
     }
     const runBaseName = formatCaptureBaseName();
     const useAutoMerge = openFocusAvailable && autoMerge;
+    const expectedShots = computeFocusStackPositions(a, b, stepSize).length;
     onStackSessionChange?.(runBaseName);
 
     const controller = new AbortController();
@@ -159,7 +159,7 @@ export function FocusControl({
       await client.runFocusStack(
         a,
         b,
-        effectiveSteps,
+        stepSize,
         settleMs,
         ({ index, total }) => {
           setTargetFocus(null);
@@ -185,7 +185,7 @@ export function FocusControl({
       abortRef.current = null;
       setStackRunning(false);
       setBusy(false);
-      void onStackSessionEnd?.(runBaseName, useAutoMerge, aborted, Math.max(2, effectiveSteps));
+      void onStackSessionEnd?.(runBaseName, useAutoMerge, aborted, expectedShots);
       prefixClearTimerRef.current = window.setTimeout(() => {
         onStackSessionChange?.(null);
         prefixClearTimerRef.current = null;
@@ -373,25 +373,18 @@ export function FocusControl({
           </div>
 
           <div className="field-inline">
-            <label>Shots</label>
+            <label>Step</label>
             <input
               type="number"
-              min={2}
-              max={200}
+              min={1}
+              max={500}
               className="input-sm"
-              disabled={autoShots}
-              value={autoShots ? (computedAutoShots ?? '') : steps}
-              placeholder={autoShots ? '--' : undefined}
-              onChange={(e) => setSteps(Number(e.target.value) || 2)}
+              value={stepSize}
+              onChange={(e) => setStepSize(Math.max(1, Math.round(Number(e.target.value) || 1)))}
             />
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={autoShots}
-                onChange={(e) => setAutoShots(e.target.checked)}
-              />
-              Auto
-            </label>
+            <span className="muted-tag">
+              {plannedShots !== null ? `${plannedShots} shots` : '-- shots'}
+            </span>
           </div>
 
           <div className="field-inline">

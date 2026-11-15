@@ -360,26 +360,43 @@ export class CameraClient {
   async runFocusStack(
     startPos: number,
     endPos: number,
-    steps: number,
+    stepSize: number,
     settleMs: number,
     onProgress: (info: { index: number; total: number; targetPos: number; actualPos: number }) => void,
     signal?: AbortSignal,
     onTarget?: (targetPos: number) => void,
   ): Promise<void> {
-    const count = Math.max(2, steps);
-    for (let i = 0; i < count; i++) {
+    const positions = computeFocusStackPositions(startPos, endPos, stepSize);
+    for (let i = 0; i < positions.length; i++) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const ratio = i / (count - 1);
-      const target = Math.round(startPos + (endPos - startPos) * ratio);
+      const target = positions[i];
       onTarget?.(target);
       const actual = await this.gotoFocus(target, 0, signal);
-      onProgress({ index: i + 1, total: count, targetPos: target, actualPos: actual });
+      onProgress({ index: i + 1, total: positions.length, targetPos: target, actualPos: actual });
       await new Promise((r) => setTimeout(r, settleMs));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       await this.takePicture();
       await new Promise((r) => setTimeout(r, 900));
     }
   }
+}
+
+export function computeFocusStackPositions(
+  startPos: number,
+  endPos: number,
+  stepSize: number,
+): number[] {
+  const start = Math.round(startPos);
+  const end = Math.round(endPos);
+  const step = Math.max(1, Math.round(stepSize));
+  if (start === end) return [start];
+  const dir = end > start ? 1 : -1;
+  const positions: number[] = [];
+  for (let pos = start; dir > 0 ? pos < end : pos > end; pos += dir * step) {
+    positions.push(pos);
+  }
+  positions.push(end);
+  return positions;
 }
 
 export function formatAperture(raw?: number): string {
