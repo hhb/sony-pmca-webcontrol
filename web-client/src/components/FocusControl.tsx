@@ -51,8 +51,8 @@ export function FocusControl({
   const [stackRunning, setStackRunning] = useState(false);
   const [startPos, setStartPos] = useState<string>('');
   const [endPos, setEndPos] = useState<string>('');
-  const [stepSize, setStepSize] = useState<number>(1);
-  const [settleMs, setSettleMs] = useState<number>(400);
+  const [stepInput, setStepInput] = useState<string>('4');
+  const [settleInput, setSettleInput] = useState<string>('400');
   const [stackStatus, setStackStatus] = useState<string | null>(null);
   const [targetFocus, setTargetFocus] = useState<number | null>(null);
   const targetFocusRef = useRef<number | null>(null);
@@ -62,9 +62,11 @@ export function FocusControl({
 
   const parsedA = startPos !== '' ? Number(startPos) : NaN;
   const parsedB = endPos !== '' ? Number(endPos) : NaN;
+  const parsedStep = stepInput.trim() !== '' ? Number(stepInput) : NaN;
+  const isStepValid = Number.isInteger(parsedStep) && parsedStep >= 1;
   const plannedShots =
-    !Number.isNaN(parsedA) && !Number.isNaN(parsedB)
-      ? computeFocusStackPositions(parsedA, parsedB, stepSize).length
+    !Number.isNaN(parsedA) && !Number.isNaN(parsedB) && isStepValid
+      ? computeFocusStackPositions(parsedA, parsedB, parsedStep).length
       : null;
 
   const currentFocus = state?.focus?.currentPosition;
@@ -139,13 +141,23 @@ export function FocusControl({
       onError('Set both Start (A) and End (B) focus positions first');
       return;
     }
+    const stepVal = stepInput.trim() !== '' ? Number(stepInput) : NaN;
+    if (!Number.isInteger(stepVal) || stepVal < 1) {
+      onError('Step must be an integer >= 1');
+      return;
+    }
+    const settleVal = settleInput.trim() !== '' ? Number(settleInput) : NaN;
+    if (Number.isNaN(settleVal) || settleVal < 0) {
+      onError('Settle (ms) must be a valid number >= 0');
+      return;
+    }
     if (prefixClearTimerRef.current !== null) {
       window.clearTimeout(prefixClearTimerRef.current);
       prefixClearTimerRef.current = null;
     }
     const runBaseName = formatCaptureBaseName();
     const useAutoMerge = openFocusAvailable && autoMerge;
-    const expectedShots = computeFocusStackPositions(a, b, stepSize).length;
+    const expectedShots = computeFocusStackPositions(a, b, stepVal).length;
     onStackSessionChange?.(runBaseName);
 
     const controller = new AbortController();
@@ -159,8 +171,8 @@ export function FocusControl({
       await client.runFocusStack(
         a,
         b,
-        stepSize,
-        settleMs,
+        stepVal,
+        settleVal,
         ({ index, total }) => {
           setTargetFocus(null);
           setStackStatus(`Shot ${index}/${total}`);
@@ -379,8 +391,9 @@ export function FocusControl({
               min={1}
               max={500}
               className="input-sm"
-              value={stepSize}
-              onChange={(e) => setStepSize(Math.max(1, Math.round(Number(e.target.value) || 1)))}
+              value={stepInput}
+              placeholder="4"
+              onChange={(e) => setStepInput(e.target.value)}
             />
             <span className="muted-tag">
               {plannedShots !== null ? `${plannedShots} shots` : '-- shots'}
@@ -391,12 +404,13 @@ export function FocusControl({
             <label>Settle (ms)</label>
             <input
               type="number"
-              min={100}
+              min={0}
               max={5000}
               step={50}
               className="input-sm"
-              value={settleMs}
-              onChange={(e) => setSettleMs(Number(e.target.value) || 300)}
+              value={settleInput}
+              placeholder="400"
+              onChange={(e) => setSettleInput(e.target.value)}
             />
           </div>
         </div>
