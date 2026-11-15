@@ -11,6 +11,13 @@ interface FocusControlProps {
   state: CameraState | null;
   connected: boolean;
   onError: (msg: string) => void;
+  onStackSessionChange?: (baseName: string | null) => void;
+}
+
+function formatCaptureBaseName(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `capture_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
 export function FocusControl({
@@ -18,18 +25,29 @@ export function FocusControl({
   state,
   connected,
   onError,
+  onStackSessionChange,
 }: FocusControlProps) {
   const [busy, setBusy] = useState(false);
   const [stackRunning, setStackRunning] = useState(false);
   const [startPos, setStartPos] = useState<string>('');
   const [endPos, setEndPos] = useState<string>('');
   const [steps, setSteps] = useState<number>(5);
+  const [autoShots, setAutoShots] = useState<boolean>(false);
   const [settleMs, setSettleMs] = useState<number>(400);
   const [stackStatus, setStackStatus] = useState<string | null>(null);
   const [targetFocus, setTargetFocus] = useState<number | null>(null);
   const targetFocusRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const gotoAbortRef = useRef<AbortController | null>(null);
+  const prefixClearTimerRef = useRef<number | null>(null);
+
+  const parsedA = startPos !== '' ? Number(startPos) : NaN;
+  const parsedB = endPos !== '' ? Number(endPos) : NaN;
+  const computedAutoShots =
+    !Number.isNaN(parsedA) && !Number.isNaN(parsedB)
+      ? Math.max(2, Math.abs(parsedB - parsedA) + 1)
+      : null;
+  const effectiveSteps = autoShots ? (computedAutoShots ?? steps) : steps;
 
   const currentFocus = state?.focus?.currentPosition;
   const maxFocus = state?.focus?.maxPosition;
@@ -103,6 +121,13 @@ export function FocusControl({
       onError('Set both Start (A) and End (B) focus positions first');
       return;
     }
+    if (prefixClearTimerRef.current !== null) {
+      window.clearTimeout(prefixClearTimerRef.current);
+      prefixClearTimerRef.current = null;
+    }
+    const runBaseName = formatCaptureBaseName();
+    onStackSessionChange?.(runBaseName);
+
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
@@ -112,7 +137,7 @@ export function FocusControl({
       await client.runFocusStack(
         a,
         b,
-        steps,
+        effectiveSteps,
         settleMs,
         ({ index, total, targetPos, actualPos }) => {
           setStackStatus(`Shot ${index}/${total} (target ${targetPos}, actual ${actualPos})`);
@@ -132,6 +157,10 @@ export function FocusControl({
       abortRef.current = null;
       setStackRunning(false);
       setBusy(false);
+      prefixClearTimerRef.current = window.setTimeout(() => {
+        onStackSessionChange?.(null);
+        prefixClearTimerRef.current = null;
+      }, 3500);
     }
   };
 
@@ -319,11 +348,21 @@ export function FocusControl({
             <input
               type="number"
               min={2}
-              max={100}
+              max={200}
               className="input-sm"
-              value={steps}
+              disabled={autoShots}
+              value={autoShots ? (computedAutoShots ?? '') : steps}
+              placeholder={autoShots ? '--' : undefined}
               onChange={(e) => setSteps(Number(e.target.value) || 2)}
             />
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={autoShots}
+                onChange={(e) => setAutoShots(e.target.checked)}
+              />
+              Auto
+            </label>
           </div>
 
           <div className="field-inline">

@@ -130,7 +130,7 @@ export function App() {
   }, [client]);
 
   const handledFilesRef = useRef<Set<string>>(new Set());
-  const pendingJpegTimerRef = useRef<number | null>(null);
+  const stackSessionRef = useRef<{ baseName: string; nextIndex: number } | null>(null);
   const saveQueueRef = useRef<Array<{ name: string; url: string }>>([]);
   const isProcessingQueueRef = useRef<boolean>(false);
 
@@ -184,65 +184,35 @@ export function App() {
     }
   }, []);
 
+  const nextCaptureFileName = useCallback(() => {
+    const stack = stackSessionRef.current;
+    if (stack) {
+      stack.nextIndex += 1;
+      return `${stack.baseName}_${String(stack.nextIndex).padStart(3, '0')}.jpg`;
+    }
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `capture_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+  }, []);
+
   const handleCaptureEvent = useCallback(
     (ev: CameraEvent) => {
       if (!autoSaveRef.current) return;
 
-      if (ev.type === 'StoreImageComplete') {
-        // SD card write completed - cancel fallback timer if any
-        if (pendingJpegTimerRef.current !== null) {
-          window.clearTimeout(pendingJpegTimerRef.current);
-          pendingJpegTimerRef.current = null;
+      if (ev.type === 'Jpeg') {
+        const dedupKey = `jpeg_${ev.seq}`;
+        if (handledFilesRef.current.has(dedupKey)) return;
+        if (handledFilesRef.current.size > 500) {
+          handledFilesRef.current.clear();
         }
-
-        const dirName = typeof ev.data?.DirectoryName === 'string' ? ev.data.DirectoryName : '';
-        const rawFileName = typeof ev.data?.FileName === 'string' ? ev.data.FileName : '';
-        if (rawFileName) {
-          const dedupKey = dirName ? `${dirName}/${rawFileName}` : rawFileName;
-          if (handledFilesRef.current.has(dedupKey)) return;
-          if (handledFilesRef.current.size > 500) {
-            handledFilesRef.current.clear();
-          }
-          handledFilesRef.current.add(dedupKey);
-
-          // Direct path avoids slow SD directory scan (which stalls on cards with thousands of files)
-          const filePath = dirName ? `/mnt/sdcard/DCIM/${dirName}/${rawFileName}` : rawFileName;
-          queueSavePhoto({
-            name: rawFileName,
-            url: client.photoDownloadUrl(filePath),
-          });
-        } else {
-          // StoreImageComplete without filename fallback
-          const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-          const name = `DSC_${stamp}_${ev.seq}.jpg`;
-          if (handledFilesRef.current.has(name)) return;
-          handledFilesRef.current.add(name);
-          queueSavePhoto({
-            name,
-            url: client.latestPhotoUrl(Date.now()),
-          });
-        }
-      } else if (ev.type === 'Jpeg') {
-        // Memory capture event arrives before StoreImageComplete.
-        // Buffer for 1.2s: if StoreImageComplete arrives, it cancels this timer and saves the high-res file.
-        // If not (e.g. shooting without SD card), saves the in-memory JPEG frame.
-        if (pendingJpegTimerRef.current !== null) {
-          window.clearTimeout(pendingJpegTimerRef.current);
-        }
-        pendingJpegTimerRef.current = window.setTimeout(() => {
-          pendingJpegTimerRef.current = null;
-          const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-          const name = `capture_${stamp}_${ev.seq}.jpg`;
-          if (handledFilesRef.current.has(name)) return;
-          handledFilesRef.current.add(name);
-          queueSavePhoto({
-            name,
-            url: client.latestPhotoUrl(Date.now()),
-          });
-        }, 1200);
+        handledFilesRef.current.add(dedupKey);
+        queueSavePhoto({
+          name: nextCaptureFileName(),
+          url: client.latestPhotoUrl(Date.now()),
+        });
       }
     },
-    [client, queueSavePhoto],
+    [client, nextCaptureFileName, queueSavePhoto],
   );
 
   const eventsCidRef = useRef<string>(getEventsClientId());
@@ -450,6 +420,9 @@ export function App() {
                 state={state}
                 connected={connected}
                 onError={setErrorMsg}
+                onStackSessionChange={(baseName) => {
+                  stackSessionRef.current = baseName ? { baseName, nextIndex: 0 } : null;
+                }}
               />
               <AutoSavePanel
                 enabled={autoSaveEnabled}
