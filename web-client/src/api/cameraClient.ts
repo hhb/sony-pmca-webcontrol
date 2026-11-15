@@ -364,12 +364,14 @@ export class CameraClient {
     settleMs: number,
     onProgress: (info: { index: number; total: number; targetPos: number; actualPos: number }) => void,
     signal?: AbortSignal,
+    onTarget?: (targetPos: number) => void,
   ): Promise<void> {
     const count = Math.max(2, steps);
     for (let i = 0; i < count; i++) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const ratio = i / (count - 1);
       const target = Math.round(startPos + (endPos - startPos) * ratio);
+      onTarget?.(target);
       const actual = await this.gotoFocus(target, 0, signal);
       onProgress({ index: i + 1, total: count, targetPos: target, actualPos: actual });
       await new Promise((r) => setTimeout(r, settleMs));

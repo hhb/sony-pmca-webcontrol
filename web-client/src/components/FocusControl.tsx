@@ -161,10 +161,14 @@ export function FocusControl({
         b,
         effectiveSteps,
         settleMs,
-        ({ index, total, targetPos, actualPos }) => {
-          setStackStatus(`Shot ${index}/${total} (target ${targetPos}, actual ${actualPos})`);
+        ({ index, total }) => {
+          setTargetFocus(null);
+          setStackStatus(`Shot ${index}/${total}`);
         },
         controller.signal,
+        (targetPos) => {
+          setTargetFocus(targetPos);
+        },
       );
       setStackStatus('Focus stack complete');
     } catch (err) {
@@ -177,6 +181,7 @@ export function FocusControl({
         onError(msg);
       }
     } finally {
+      setTargetFocus(null);
       abortRef.current = null;
       setStackRunning(false);
       setBusy(false);
