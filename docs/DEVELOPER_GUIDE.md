@@ -13,7 +13,11 @@ sony-pmca-webcontrol/
 │       ├── assets/index.html   # Lightweight built-in fallback web UI served at http://<ip>:8080/
 │       └── java/com/sony/pmca/webcontrol/
 ├── web-client/                 # React + TypeScript + Vite frontend & CameraClient SDK
-│   └── src/api/cameraClient.ts
+│   └── src/api/
+│       ├── cameraClient.ts
+│       └── hostBackend.ts      # /local-api/* client for host backend & OpenFocus
+├── host-server/                # Optional Python 3 companion server (proxy + Auto-Save + OpenFocus)
+│   └── server.py
 ├── tools/Sony-PMCA-RE/         # USB MTP flashing toolchain (pmca-console.py)
 └── .github/workflows/build.yml # CI build for APK + single-file web-client HTML
 ```
@@ -44,8 +48,13 @@ Output APK: `camera-app/app/build/outputs/apk/sony-pmca-webcontrol-debug-1.0.0.a
 ```bash
 cd web-client
 npm install
-npm run dev       # Local HTTPS dev server (HTTPS is required by browsers for showDirectoryPicker)
+npm run dev       # Local HTTPS dev server (proxies /api -> camera and /local-api -> host-server)
 npm run build     # Type-check (tsc -b) + Vite single-file build -> web-client/dist/index.html
+```
+
+To run the host companion backend during development or production:
+```bash
+python3 host-server/server.py --camera http://192.168.0.250:8080 --openfocus-dir /path/to/OpenFocus
 ```
 
 To check for unused locals/parameters strictly:

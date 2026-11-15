@@ -181,3 +181,18 @@ Long-polling endpoint backed by a 256-entry ring buffer. Blocks until at least o
 * **`GET /api/photos/latest`**: Downloads the latest captured JPEG (from in-memory capture buffer or SD card).
 * **`GET /api/photos/download?path=<absolutePath>`**: Streams a specific SD card file (JPG or ARW).
 * **`GET /api/log`**: Returns plain-text crash/debug logs from the camera.
+
+---
+
+## 5. Host Companion Backend Endpoints (`/local-api/*`)
+
+When `web-client` is served through `host-server/server.py` (or `vite dev` proxying `/local-api` to `VITE_BACKEND_URL`), the following host-side endpoints are available:
+
+* **`GET /local-api/capabilities`**: Returns backend availability, configured `saveDir`, and OpenFocus CLI detection status (`{ backend, cameraUrl, saveDir, openfocus: { available, reason } }`).
+* **`POST /local-api/photos/save-latest`**: Body `{ filename, cameraUrl? }`. Fetches `/api/photos/latest` from the camera and writes it to `saveDir/<filename>`.
+* **`POST /local-api/stacks`**: Body `{ sessionId, cameraUrl? }`. Creates a temporary focus-stack collection directory.
+* **`POST /local-api/stacks/{sessionId}/grab-latest`**: Fetches `/api/photos/latest` from the camera and stores it sequentially (`001.jpg`, `002.jpg`, ...) in the session's input folder.
+* **`POST /local-api/stacks/{sessionId}/merge`**: Body `{ saveToBackend?, filename? }`. Asynchronously launches OpenFocus CLI (`--method dtcwt --align ecc`) to produce `output.jpg`, optionally copying it to `saveDir/<filename>`.
+* **`GET /local-api/stacks/{sessionId}`**: Returns `{ sessionId, status, frameCount, error, savedFilename }` (`status`: `collecting` | `merging` | `done` | `error`).
+* **`GET /local-api/stacks/{sessionId}/result`**: Streams the merged JPEG (`image/jpeg`).
+* **`DELETE /local-api/stacks/{sessionId}`**: Deletes the temporary session directory.

@@ -1,6 +1,6 @@
 # AGENTS.md — AI Coding Agent Guide
 
-Project: **Sony PMCA WebControl** — Android 2.3 (API 10) in-camera HTTP/RPC bridge (`camera-app/`) + React/TypeScript web frontend (`web-client/`).
+Project: **Sony PMCA WebControl** — Android 2.3 (API 10) in-camera HTTP/RPC bridge (`camera-app/`), React/TypeScript web frontend (`web-client/`), and optional Python 3 host companion server (`host-server/`).
 
 ## Build & Flashing Commands
 
@@ -28,6 +28,12 @@ Project: **Sony PMCA WebControl** — Android 2.3 (API 10) in-camera HTTP/RPC br
   cd web-client && npx tsc --noEmit --noUnusedLocals --noUnusedParameters && npm run build
   ```
   * Output: single self-contained `web-client/dist/index.html`.
+
+* **Run or syntax-check host companion server (`host-server/`)**:
+  ```bash
+  python3 -m py_compile host-server/server.py
+  python3 host-server/server.py --camera http://192.168.0.250:8080 --openfocus-dir /path/to/OpenFocus
+  ```
 
 ## Key Documentation
 * [docs/DESIGN.md](./docs/DESIGN.md) — Overall architecture, threading/lock separation, closed-loop control, and LiveView slot design

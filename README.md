@@ -16,7 +16,8 @@ You don't need Android Studio or Node.js to try it out:
 * **Direct Home Wi-Fi Connection**: Connects directly to your existing Wi-Fi router (no need to disconnect your Mac or iPad from the internet to join an ad-hoc camera hotspot) and displays its LAN IP address on the camera screen (port `80` or `8080`).
 * **Universal Reflective RPC & High-Level Closed-Loop APIs (`POST /api/call` & `GET /api/describe`)**: Exposes Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Scalar static/system classes over HTTP with automatic JSON ↔ Java conversion and batching, plus device-side `highlevel` closed-loop setters (`setFocusPosition`, `setAperture`, `setShutterSpeed`, `setZoomPosition`).
 * **Real-Time Event Stream & MJPEG Live View**: Hardware-accelerated 640px JPEG preview stream (`/api/liveview.mjpeg` and `/api/liveview.jpg`) plus long-polling `CameraEx` listener events (`/api/events`) and state snapshots (`/api/state`).
-* **Modern React Web Client (`web-client/`)**: Single-file React + TypeScript app featuring live Focus Peaking, rule-of-thirds grid, luma histogram, 2x–4x click-to-magnify Focus Loupe, exposure & EV compensation controls, automated focus stacking, SD card photo browser, auto-save to local directory, and an interactive RPC Inspector.
+* **Modern React Web Client (`web-client/`)**: Single-file React + TypeScript app featuring live Focus Peaking, rule-of-thirds grid, luma histogram, 2x–4x click-to-magnify Focus Loupe, exposure & EV compensation controls, automated focus stacking (with `Auto` shot count calculation), SD card photo browser, auto-save (`capture_YYYYMMDD_HHMMSS.jpg`), and an interactive RPC Inspector.
+* **Optional Host Companion Backend (`host-server/`)**: Zero-dependency Python 3 server that proxies `/api/*` to the camera, enables direct disk **Auto-Save** without browser folder picker restrictions, and integrates with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) to automatically align/merge focus stacks and save only the single resulting `.jpg`.
 * **Built-in Fallback Web UI**: Opening `http://<camera-ip>:8080` directly in any browser serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.
 
 ## Requirements
@@ -51,6 +52,7 @@ You don't need Android Studio or Node.js to try it out:
 
 * `camera-app/` — Android 2.3 (API 10) in-camera APK source built on `OpenMemories-Framework` and `NanoHTTPD`
 * `web-client/` — React + TypeScript + Vite web control UI and `CameraClient` SDK (`src/api/cameraClient.ts`)
+* `host-server/` — Optional Python 3 companion backend (`server.py`) for camera `/api/*` proxying, backend Auto-Save, and OpenFocus stack merging
 * `.github/workflows/build.yml` — GitHub Actions CI that builds both the camera `.apk` and single-file `web-client/dist/index.html` (and publishes GitHub Releases on `v*` tags)
 
 ## License
