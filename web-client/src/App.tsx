@@ -107,6 +107,7 @@ export function App() {
   const client = useMemo(() => new CameraClient(activeUrl), [activeUrl]);
 
   const [connected, setConnected] = useState(false);
+  const [manualDisconnected, setManualDisconnected] = useState(false);
   const [state, setState] = useState<CameraState | null>(null);
   const [events, setEvents] = useState<LoggedCameraEvent[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -490,6 +491,10 @@ export function App() {
 
   // Initial state fetch + SSE /api/events/stream (kept open across tab switches so captures are never missed)
   useEffect(() => {
+    if (manualDisconnected) {
+      setConnected(false);
+      return;
+    }
     let cancelled = false;
     let eventSource: EventSource | null = null;
     let retryTimer: number | null = null;
@@ -579,12 +584,19 @@ export function App() {
       }
       client.closeEventsStream(eventsCidRef.current);
     };
-  }, [client, handleCaptureEvent, refreshState]);
+  }, [client, handleCaptureEvent, refreshState, manualDisconnected]);
 
   const handleConnectSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (connected) {
+      setManualDisconnected(true);
+      setConnected(false);
+      setState(null);
+      return;
+    }
     const cleaned = urlInput.trim().replace(/\/+$/, '');
     if (!cleaned) return;
+    setManualDisconnected(false);
     client.setBaseUrl(cleaned);
     setActiveUrl(cleaned);
     seqRef.current = 0;
@@ -652,21 +664,33 @@ export function App() {
     });
   }, [openBlobInNewTab]);
 
-  const wifiLabel =
-    typeof state?.wifi === 'string'
-      ? state.wifi
-      : state?.wifi?.ip
-        ? `${state.wifi.ip}:${state.wifi.port ?? 8080}`
-        : null;
-
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
           <span className={`status-dot ${connected ? 'dot-ok' : 'dot-off'}`} />
           <span className="brand-title">Sony PMCA WebControl</span>
-          {wifiLabel && <span className="muted-tag">{wifiLabel}</span>}
         </div>
+
+        <nav className="tabs" aria-label="Primary views">
+          {(
+            [
+              { id: 'control', label: 'Camera Control' },
+              { id: 'photos', label: 'Photos' },
+              { id: 'events', label: 'Events' },
+              { id: 'rpc', label: 'RPC Inspector' },
+            ] as const
+          ).map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              className={`tab-btn ${tab === id ? 'tab-active' : ''}`}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
 
         {!__CAMERA_EMBEDDED__ && (
           <form className="connect-form" onSubmit={handleConnectSubmit}>
@@ -674,13 +698,18 @@ export function App() {
               type="text"
               className="input-text url-input"
               value={urlInput}
+              disabled={connected}
               onChange={(e) => setUrlInput(e.target.value)}
               placeholder="http://192.168.0.250:8080"
               aria-label="Camera base URL"
               title="Camera HTTP server URL"
             />
-            <button type="submit" className="btn btn-primary btn-sm" title="Connect to camera">
-              Connect
+            <button
+              type="submit"
+              className={`btn btn-sm ${connected ? 'btn-danger' : 'btn-primary'}`}
+              title={connected ? 'Disconnect from camera' : 'Connect to camera'}
+            >
+              {connected ? 'Disconnect' : 'Connect'}
             </button>
           </form>
         )}
@@ -699,37 +728,6 @@ export function App() {
           </button>
         </div>
       )}
-
-      <nav className="tabs">
-        <button
-          type="button"
-          className={`tab-btn ${tab === 'control' ? 'tab-active' : ''}`}
-          onClick={() => setTab('control')}
-        >
-          Camera Control
-        </button>
-        <button
-          type="button"
-          className={`tab-btn ${tab === 'photos' ? 'tab-active' : ''}`}
-          onClick={() => setTab('photos')}
-        >
-          Photos
-        </button>
-        <button
-          type="button"
-          className={`tab-btn ${tab === 'events' ? 'tab-active' : ''}`}
-          onClick={() => setTab('events')}
-        >
-          Events
-        </button>
-        <button
-          type="button"
-          className={`tab-btn ${tab === 'rpc' ? 'tab-active' : ''}`}
-          onClick={() => setTab('rpc')}
-        >
-          RPC Inspector
-        </button>
-      </nav>
 
       <main className="main-content">
         {tab === 'control' && (

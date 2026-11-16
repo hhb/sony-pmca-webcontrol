@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
   computeFocusStackPositions,
-  ZOOM_TELE,
-  ZOOM_WIDE,
 } from '../api/cameraClient';
 
 interface FocusControlProps {
@@ -127,82 +125,6 @@ export function FocusControl({
     void moveFocusTo(base + delta);
   };
 
-  const zoomPressRef = useRef<{
-    active: boolean;
-    holding: boolean;
-    timerId: number | null;
-  }>({ active: false, holding: false, timerId: null });
-
-  useEffect(() => {
-    return () => {
-      const press = zoomPressRef.current;
-      if (press.timerId !== null) {
-        window.clearTimeout(press.timerId);
-        press.timerId = null;
-      }
-      if (press.holding) {
-        press.holding = false;
-        void client.stopZoom().catch(() => {});
-      }
-      press.active = false;
-    };
-  }, [client]);
-
-  const stepZoom = async (dir: 0 | 1) => {
-    setBusy(true);
-    try {
-      await client.zoomStep(dir, 1);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleZoomPointerDown = (dir: 0 | 1, e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!connected || busy) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-
-    const press = zoomPressRef.current;
-    if (press.timerId !== null) {
-      window.clearTimeout(press.timerId);
-    }
-    press.active = true;
-    press.holding = false;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-
-    press.timerId = window.setTimeout(() => {
-      press.timerId = null;
-      if (!press.active) return;
-      press.holding = true;
-      void client.startZoom(dir, 1).catch((err) => {
-        onError(err instanceof Error ? err.message : String(err));
-      });
-    }, 400);
-  };
-
-  const handleZoomPointerEnd = (dir: 0 | 1) => {
-    const press = zoomPressRef.current;
-    if (press.timerId !== null) {
-      window.clearTimeout(press.timerId);
-      press.timerId = null;
-    }
-    if (!press.active) return;
-    const wasHolding = press.holding;
-    press.active = false;
-    press.holding = false;
-
-    if (wasHolding) {
-      void client.stopZoom().catch((err) => {
-        onError(err instanceof Error ? err.message : String(err));
-      });
-    } else {
-      void stepZoom(dir);
-    }
-  };
-
   const handleStartStack = async () => {
     const a = Number(startPos);
     const b = Number(endPos);
@@ -279,60 +201,42 @@ export function FocusControl({
     abortRef.current?.abort();
   };
 
-  const focalLabel =
-    typeof state?.focalLength === 'number' && state.focalLength > 0
-      ? `${Math.round(state.focalLength / 10)}mm`
-      : null;
-
-  const renderZoomButton = (dir: 0 | 1, label: string, hint: string) => (
-    <button
-      key={label}
-      type="button"
-      className="btn btn-sm"
-      disabled={!connected || busy}
-      title={hint}
-      aria-label={hint}
-      onPointerDown={(e) => handleZoomPointerDown(dir, e)}
-      onPointerUp={() => handleZoomPointerEnd(dir)}
-      onPointerCancel={() => handleZoomPointerEnd(dir)}
-      onClick={(e) => {
-        if (e.detail === 0) void stepZoom(dir);
-      }}
-    >
-      {label}
-    </button>
-  );
+  const focusButtons = [
+    { delta: -20, symbol: '««', label: 'Focus Near (-20)' },
+    { delta: -5, symbol: '«', label: 'Focus Near (-5)' },
+    { delta: -1, symbol: '‹', label: 'Focus Near (-1)' },
+    { delta: 1, symbol: '›', label: 'Focus Far (+1)' },
+    { delta: 5, symbol: '»', label: 'Focus Far (+5)' },
+    { delta: 20, symbol: '»»', label: 'Focus Far (+20)' },
+  ];
 
   return (
     <section className="panel">
-      <div className="panel-header">
+      <div className="panel-header focus-header">
         <div className="panel-title">
-          <span>Focus &amp; Zoom</span>
-          <span className="badge">
-            MF:{' '}
+          <span>Focus</span>
+          <span className="badge focus-pos-badge">
             {targetFocus !== null && targetFocus !== currentFocus
               ? `${currentFocus ?? '--'} → ${targetFocus}`
               : (currentFocus ?? '--')}{' '}
             / {maxFocus ?? '--'}
           </span>
         </div>
-        {(state?.powerZoom || focalLabel) && (
-          <div className="toolbar-row" style={{ alignItems: 'center' }}>
-            {state?.powerZoom &&
-              renderZoomButton(
-                ZOOM_WIDE as 0 | 1,
-                'Zoom -',
-                'Zoom wide (tap for 1 step, hold for continuous zoom)',
-              )}
-            {focalLabel && <span className="badge">{focalLabel}</span>}
-            {state?.powerZoom &&
-              renderZoomButton(
-                ZOOM_TELE as 0 | 1,
-                'Zoom +',
-                'Zoom tele (tap for 1 step, hold for continuous zoom)',
-              )}
-          </div>
-        )}
+        <div className="focus-buttons-inline">
+          {focusButtons.map(({ delta, symbol, label }) => (
+            <button
+              key={delta}
+              type="button"
+              className="btn btn-sm"
+              disabled={!canDragFocus || typeof currentFocus !== 'number'}
+              onClick={() => stepFocus(delta)}
+              title={label}
+              aria-label={label}
+            >
+              {symbol}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div
@@ -375,69 +279,6 @@ export function FocusControl({
             }
           }}
         />
-      </div>
-
-      <div className="focus-buttons">
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(-20)}
-          title="Focus Near (-20)"
-          aria-label="Focus Near (-20)"
-        >
-          &laquo;&laquo; Near
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(-5)}
-          title="Focus Near (-5)"
-          aria-label="Focus Near (-5)"
-        >
-          &laquo;
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(-1)}
-          title="Focus Near (-1)"
-          aria-label="Focus Near (-1)"
-        >
-          &lsaquo;
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(1)}
-          title="Focus Far (+1)"
-          aria-label="Focus Far (+1)"
-        >
-          &rsaquo;
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(5)}
-          title="Focus Far (+5)"
-          aria-label="Focus Far (+5)"
-        >
-          &raquo;
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!canDragFocus || typeof currentFocus !== 'number'}
-          onClick={() => stepFocus(20)}
-          title="Focus Far (+20)"
-          aria-label="Focus Far (+20)"
-        >
-          Far &raquo;&raquo;
-        </button>
       </div>
 
       <div className="subpanel">

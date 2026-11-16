@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   type CameraClient,
   type CameraState,
   formatAperture,
   formatEv,
   formatShutter,
+  ZOOM_TELE,
+  ZOOM_WIDE,
 } from '../api/cameraClient';
 
 interface ExposureControlProps {
@@ -252,6 +254,107 @@ export function ExposureControl({
   const isoValue = localIso !== null ? localIso : state?.autoIso;
   const hasAutoExposure = autoAperture || autoShutter || isoValue === 0;
   const evDisabled = !connected || busy || !hasAutoExposure;
+
+  const focalLabel =
+    typeof state?.focalLength === 'number' && state.focalLength > 0
+      ? `${Math.round(state.focalLength / 10)}mm`
+      : null;
+  const hasZoomCard = Boolean(state?.powerZoom || focalLabel);
+
+  const zoomPressRef = useRef<{
+    active: boolean;
+    holding: boolean;
+    timerId: number | null;
+  }>({ active: false, holding: false, timerId: null });
+
+  useEffect(() => {
+    return () => {
+      const press = zoomPressRef.current;
+      if (press.timerId !== null) {
+        window.clearTimeout(press.timerId);
+        press.timerId = null;
+      }
+      if (press.holding) {
+        press.holding = false;
+        void client.stopZoom().catch(() => {});
+      }
+      press.active = false;
+    };
+  }, [client]);
+
+  const stepZoom = async (dir: 0 | 1) => {
+    setBusy(true);
+    try {
+      await client.zoomStep(dir, 1);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleZoomPointerDown = (dir: 0 | 1, e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!connected || busy) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    const press = zoomPressRef.current;
+    if (press.timerId !== null) {
+      window.clearTimeout(press.timerId);
+    }
+    press.active = true;
+    press.holding = false;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+
+    press.timerId = window.setTimeout(() => {
+      press.timerId = null;
+      if (!press.active) return;
+      press.holding = true;
+      void client.startZoom(dir, 1).catch((err) => {
+        onError(err instanceof Error ? err.message : String(err));
+      });
+    }, 400);
+  };
+
+  const handleZoomPointerEnd = (dir: 0 | 1) => {
+    const press = zoomPressRef.current;
+    if (press.timerId !== null) {
+      window.clearTimeout(press.timerId);
+      press.timerId = null;
+    }
+    if (!press.active) return;
+    const wasHolding = press.holding;
+    press.active = false;
+    press.holding = false;
+
+    if (wasHolding) {
+      void client.stopZoom().catch((err) => {
+        onError(err instanceof Error ? err.message : String(err));
+      });
+    } else {
+      void stepZoom(dir);
+    }
+  };
+
+  const renderZoomButton = (dir: 0 | 1, label: string, hint: string) => (
+    <button
+      key={label}
+      type="button"
+      className="btn"
+      disabled={!connected || busy}
+      title={hint}
+      aria-label={hint}
+      onPointerDown={(e) => handleZoomPointerDown(dir, e)}
+      onPointerUp={() => handleZoomPointerEnd(dir)}
+      onPointerCancel={() => handleZoomPointerEnd(dir)}
+      onClick={(e) => {
+        if (e.detail === 0) void stepZoom(dir);
+      }}
+    >
+      {label}
+    </button>
+  );
 
   const changeIso = async (val: number) => {
     setLocalIso(val);
@@ -523,7 +626,7 @@ export function ExposureControl({
           </div>
         </div>
 
-        <div className="metric-card metric-card-wide">
+        <div className={`metric-card ${hasZoomCard ? '' : 'metric-card-wide'}`}>
           <div className="metric-header-row">
             <span className="metric-label">WB</span>
             <select
@@ -632,6 +735,33 @@ export function ExposureControl({
             )}
           </div>
         </div>
+
+        {hasZoomCard && (
+          <div className="metric-card">
+            <div className="metric-header-row">
+              <span className="metric-label">Zoom</span>
+              <span className="metric-value metric-value-inline">{focalLabel ?? '--'}</span>
+            </div>
+            {state?.powerZoom ? (
+              <div className="stepper-row">
+                {renderZoomButton(
+                  ZOOM_WIDE as 0 | 1,
+                  'Zoom -',
+                  'Zoom wide (tap for 1 step, hold for continuous zoom)',
+                )}
+                {renderZoomButton(
+                  ZOOM_TELE as 0 | 1,
+                  'Zoom +',
+                  'Zoom tele (tap for 1 step, hold for continuous zoom)',
+                )}
+              </div>
+            ) : (
+              <div className="stepper-row">
+                <span className="muted-tag">Manual / Prime</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
