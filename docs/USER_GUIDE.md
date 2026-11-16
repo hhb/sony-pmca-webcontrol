@@ -60,7 +60,7 @@ If you don't want to set up Python dependencies or USB drivers manually, use **[
 
 1. Make sure your camera has a saved Wi-Fi network configured (under camera **Network → Access Point Set.**).
 2. On the camera: **Menu → Application → Application List → PMCA WebControl**.
-3. Wait for the camera to join your Wi-Fi router. The LAN IP address and port (for example, `http://192.168.0.250:8080`) appear at the bottom of the camera screen.
+3. Wait for the camera to join your Wi-Fi router. The LAN IP address and port (for example, `http://192.168.0.250:8080`) appear at the bottom of the camera screen. Press **UP** or **OK** on the camera to toggle the on-screen HUD overlay.
 
 ---
 
@@ -71,26 +71,26 @@ If you don't want to set up Python dependencies or USB drivers manually, use **[
 You can control the camera in two ways:
 
 ### Option A: Full React Web Client (`web-client/`)
-Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/` for HTTPS local development, which is required by browsers for `showDirectoryPicker` auto-save) and connect to your camera's IP:
-* **LiveView**: Canvas-based MJPEG stream (with a debug toggle to `/api/liveview.jpg` polling) featuring client-side **Focus Peaking**, **Rule-of-Thirds Grid**, **Luma Histogram**, and **5.9x / 11.7x Click-to-Magnify Focus Loupe**. Automatically pauses and notifies the camera to release the stream slot when you switch browser tabs or minimize the window.
-* **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and remote shutter release.
-* **Focus & Stacking**: Multi-speed manual focus stepping, power zoom, and automated closed-loop **Focus Bracketing / Focus Stacking** between `Start A` and `End B`.
+Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/` for HTTPS local development, which is required by browsers for `showDirectoryPicker` folder auto-save) and connect to your camera's IP (or disconnect/switch URLs in the top bar):
+* **LiveView**: Canvas-based MJPEG stream (with pause/resume, 90° left/right rotation `↺ / ↻`, and a toggle to `/api/liveview.jpg` single-frame polling) featuring client-side **Focus Peaking**, **Rule-of-Thirds Grid**, **Luma Histogram**, click-to-**Focus** (touch AF lock), and click-to-**Magnify** (`5.9x / 11.7x` Focus Loupe with `Reset` and configurable **Auto-Reset** timer). Automatically pauses and notifies the camera to release the stream slot when you switch browser tabs or minimize the window.
+* **Exposure, White Balance & Zoom**: Real-time aperture and shutter speed steppers with per-metric **Auto** toggles, ISO selector, EV compensation (with `Reset` and automatic disable in full manual mode), **White Balance** presets / Color Temp (`K`) / `A/B` & `G/M` shifts, live focal length (`mm`) with tap/hold power zoom controls, and remote shutter release.
+* **Focus & Stacking**: Multi-speed manual focus stepping, closed-loop focus position slider, and automated **Focus Bracketing / Focus Stacking** between `Start A` and `End B` (with `⇄` A/B swap and configurable `Settle (ms)`).
   * Set **Step** to control the focus position increment per shot; the total shot count is calculated automatically (including `End B` if not evenly divisible).
-  * Check **Auto Merge (OpenFocus)** (enabled when running via the host companion backend with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) installed) to align and merge the stack on the host backend and save **only the single merged `.jpg`** (`capture_YYYYMMDD_HHMMSS.jpg`) to your browser's local machine. When the host backend or OpenFocus is unavailable, the checkbox is greyed out with an `i` tooltip explaining why.
-* **Auto-Save**: Automatically saves newly captured photos to the **browser machine's local folder** (via File System Access API `showDirectoryPicker` or browser download fallback) using consistent local timestamps (`capture_YYYYMMDD_HHMMSS.jpg` for single shots, and `capture_YYYYMMDD_HHMMSS_001.jpg`, `_002.jpg`, ... for focus stacks). Requires the host companion backend (`capabilities.backend === true`); when no backend is detected, Auto-Save is greyed out with an `i` tooltip explaining why.
-* **Photo Browser**: Browse SD card `DCIM` folders, preview photos, and download `.JPG` / `.ARW` files.
+  * Check **Auto Merge** (enabled when running via the host companion backend with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) installed) to align and merge the stack on the host backend and save **only the single merged `.jpg`** (`capture_YYYYMMDD_HHMMSS.jpg`) to your browser's local machine. When the host backend or OpenFocus is unavailable, the checkbox is greyed out with an `i` tooltip explaining why.
+* **Save / Auto-Save**: Available in all modes. Toggle **Auto** to automatically save newly captured photos (`capture_YYYYMMDD_HHMMSS.jpg` for single shots, and `capture_YYYYMMDD_HHMMSS_001.jpg`, `_002.jpg`, ... for focus stacks) to your **browser machine's local folder** (via File System Access API `showDirectoryPicker` on HTTPS/`localhost`, or standard browser download fallback over plain HTTP), plus **Download Latest** and **View Latest** buttons.
+* **Photo Browser & Events**: Browse SD card `DCIM` folders, preview photos, download `.JPG` / `.ARW` files, and inspect live SSE camera events.
 * **RPC Inspector**: Interactive `/api/describe` explorer and `/api/call` tester.
 
 > **Auto-Save Browser Context Note:**
-> * Opening the single-file `index.html` directly via `file://` works for LiveView, exposure, focus stacking, and photo browsing (via direct CORS requests to the camera), **except** browsers do not allow `showDirectoryPicker` on `file://` pages — Auto-Save will automatically fall back to standard browser downloads into your default Downloads folder.
-> * To save silently into a chosen local folder without the host backend, open the UI from a secure context: either run `cd web-client && npm run dev` (local HTTPS + `/api` proxy) or serve `dist/index.html` on `http://localhost` (e.g., `python3 -m http.server 8000` inside `web-client/dist/`).
+> * Opening the single-file `index.html` via `file://` or directly from the camera (`http://<camera-ip>:8080`) works for LiveView, exposure/WB, focus stacking, photo browsing, and **Auto-Save** — browsers simply fall back to standard browser downloads into your default Downloads folder instead of `showDirectoryPicker`.
+> * To save silently into a chosen local folder via `showDirectoryPicker`, open the UI from a secure context: either run `host-server/server.py` (HTTPS over LAN), run `cd web-client && npm run dev` (local HTTPS + `/api` proxy), or serve `dist/index.html` on `http://localhost`.
 
-### Option B: Host Companion Backend (`host-server/server.py`, Recommended for Auto-Save & Stacking)
-Run the zero-dependency Python 3 companion server on your computer to serve `web-client/dist/index.html`, proxy `/api/*` to the camera, enable browser local **Auto-Save**, and unlock **OpenFocus** auto-merging:
+### Option B: Host Companion Backend (`host-server/server.py`, Recommended for Local Folder Auto-Save & Stacking)
+Run the zero-dependency Python 3 companion server on your computer to serve `web-client/dist/index.html` over HTTPS, proxy `/api/*` to the camera, unlock `showDirectoryPicker` local-folder **Auto-Save** over your LAN, and enable **OpenFocus** auto-merging:
 ```bash
 python3 host-server/server.py --camera http://<camera-ip>:8080 --openfocus-dir /path/to/OpenFocus
 ```
 Then open `https://localhost:8000` (or `https://<host-ip>:8000` over LAN, accepting the self-signed certificate) in your browser. HTTPS is always enabled so `showDirectoryPicker` Auto-Save works across your LAN.
 
-### Option C: Built-in Fallback UI
-Opening `http://<camera-ip>:8080` directly in any modern browser on your LAN serves the pre-compressed, camera-embedded React UI (`assets/index.html.gzip`, served with `Content-Encoding: gzip`), so you get LiveView, Focus Peaking, Exposure, Focus Stacking, Photos, Events, and RPC Inspector without running a separate host server (host-only features like Auto-Save and Auto Merge are compiled out).
+### Option C: Built-in In-Camera UI
+Opening `http://<camera-ip>:8080` directly in any modern browser on your LAN serves the pre-compressed, camera-embedded React UI (`assets/index.html.gzip`, served with `Content-Encoding: gzip`), providing LiveView, Focus Peaking, Exposure/WB/Zoom, Focus Stacking, Save/Auto-Save (via browser downloads), Photos, Events, and RPC Inspector without running a separate host server (only host-side **Auto Merge** is omitted).
