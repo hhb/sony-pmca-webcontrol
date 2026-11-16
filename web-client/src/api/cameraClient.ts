@@ -125,6 +125,16 @@ export interface AutoFocusResult {
   position?: number;
 }
 
+export interface SetFocusResult {
+  converged: boolean;
+  superseded: boolean;
+  stalled: boolean;
+  position: number;
+  target: number;
+  steps: number;
+  manualOverride?: boolean;
+}
+
 const STORAGE_KEY = 'pmca_camera_base_url';
 
 export function getDefaultCameraUrl(): string {
@@ -190,10 +200,12 @@ export class CameraClient {
     target: RpcTarget,
     method: string,
     args: unknown[] = [],
+    signal?: AbortSignal,
   ): Promise<T> {
     const data = await this.requestJson<RpcResult<T>>('/api/call', {
       method: 'POST',
       body: JSON.stringify({ target, method, args }),
+      signal,
     });
     return data.result as T;
   }
@@ -206,8 +218,8 @@ export class CameraClient {
     return this.requestJson<DescribeResponse>(`/api/describe${qs ? `?${qs}` : ''}`);
   }
 
-  async getState(): Promise<CameraState> {
-    return this.requestJson<CameraState>('/api/state');
+  async getState(signal?: AbortSignal): Promise<CameraState> {
+    return this.requestJson<CameraState>('/api/state', { signal });
   }
 
   async pollEvents(
@@ -369,11 +381,26 @@ export class CameraClient {
     signal?: AbortSignal,
   ): Promise<number> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const res = await this.call<{ position: number }>(
+    const res = await this.call<SetFocusResult>(
       'highlevel',
       'setFocusPosition',
       [targetPos, tolerance],
+      signal,
     );
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    if (res.manualOverride) {
+      throw new Error('Manual focus override detected');
+    }
+    if (res.superseded) {
+      throw new DOMException('Superseded', 'AbortError');
+    }
+    if (!res.converged || Math.abs(res.position - res.target) > tolerance) {
+      throw new Error(
+        `Focus failed to reach ${res.target} (stopped at ${res.position}${res.stalled ? ', stalled' : ''})`,
+      );
+    }
     return res.position;
   }
 
@@ -394,16 +421,34 @@ export class CameraClient {
       onTarget?.(target);
       const actual = await this.gotoFocus(target, 0, signal);
       onProgress({ index: i + 1, total: positions.length, targetPos: target, actualPos: actual });
-      await new Promise((r) => setTimeout(r, settleMs));
+      await waitAbortable(settleMs, signal);
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       if (onCaptureShot) {
         await onCaptureShot(() => this.takePicture(), signal);
       } else {
         await this.takePicture();
-        await new Promise((r) => setTimeout(r, 900));
+        await waitAbortable(900, signal);
       }
     }
   }
+}
+
+function waitAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  }
+  if (ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export function computeFocusStackPositions(

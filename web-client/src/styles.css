@@ -635,8 +635,45 @@ body {
 
 .stack-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: auto minmax(28px, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 8px;
+  align-items: center;
+}
+
+.stack-col-left {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.stack-swap-btn {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.stack-col-right {
+  grid-column: 3;
+  min-width: 0;
+}
+
+.stack-grid .stack-col-left label {
+  min-width: 48px;
+  white-space: nowrap;
+}
+
+.stack-grid .stack-col-right label {
+  min-width: 64px;
+  white-space: nowrap;
+}
+
+.stack-grid .input-sm {
+  width: 64px;
+  flex: 0 1 64px;
+  min-width: 46px;
+}
+
+.stack-col-left .muted-tag {
+  white-space: nowrap;
 }
 
 .field-inline {
@@ -893,7 +930,11 @@ body {
 }
 
 .autosave-status {
-  margin-top: 8px;
+  min-width: 0;
+  flex: 1 1 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.78rem;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

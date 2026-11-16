@@ -19,7 +19,6 @@ interface FocusControlProps {
   onAutoMergeChange: (checked: boolean) => void;
   hideAutoMerge?: boolean;
   mergeStatus?: string | null;
-  measuredStep?: { step: number; seq: number } | null;
   onStackSessionStart?: (baseName: string, autoMerge: boolean) => Promise<void> | void;
   onCaptureStackShot?: (triggerShot: () => Promise<unknown>, signal?: AbortSignal) => Promise<void>;
   onStackSessionEnd?: (
@@ -48,7 +47,6 @@ export function FocusControl({
   onAutoMergeChange,
   hideAutoMerge = false,
   mergeStatus,
-  measuredStep,
   onStackSessionStart,
   onCaptureStackShot,
   onStackSessionEnd,
@@ -60,12 +58,6 @@ export function FocusControl({
   const [stepInput, setStepInput] = useState<string>('4');
   const [settleInput, setSettleInput] = useState<string>('400');
   const [stackStatus, setStackStatus] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!measuredStep) return;
-    setStepInput(String(measuredStep.step));
-    setStackStatus(`Measured step: ${measuredStep.step}`);
-  }, [measuredStep]);
   const [targetFocus, setTargetFocus] = useState<number | null>(null);
   const targetFocusRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -437,7 +429,7 @@ export function FocusControl({
       <div className="subpanel">
         <div className="subpanel-title">Focus Stacking (Client-Side Closed Loop)</div>
         <div className="stack-grid">
-          <div className="field-inline">
+          <div className="field-inline stack-col-left">
             <label>Start A</label>
             <input
               type="number"
@@ -460,7 +452,21 @@ export function FocusControl({
             </button>
           </div>
 
-          <div className="field-inline">
+          <button
+            type="button"
+            className="btn btn-sm stack-swap-btn"
+            disabled={stackRunning || (startPos === '' && endPos === '')}
+            onClick={() => {
+              setStartPos(endPos);
+              setEndPos(startPos);
+            }}
+            title="Swap Start A and End B"
+            aria-label="Swap Start A and End B"
+          >
+            ⇄
+          </button>
+
+          <div className="field-inline stack-col-right">
             <label>End B</label>
             <input
               type="number"
@@ -483,7 +489,7 @@ export function FocusControl({
             </button>
           </div>
 
-          <div className="field-inline">
+          <div className="field-inline stack-col-left">
             <label>Step</label>
             <input
               type="number"
@@ -501,7 +507,7 @@ export function FocusControl({
             </span>
           </div>
 
-          <div className="field-inline">
+          <div className="field-inline stack-col-right">
             <label>Settle (ms)</label>
             <input
               type="number"

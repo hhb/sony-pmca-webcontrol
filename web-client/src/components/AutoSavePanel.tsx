@@ -47,19 +47,39 @@ export function AutoSavePanel({
           )}
           {savedCount > 0 && <span className="badge">{savedCount} saved</span>}
         </div>
-        <button
-          type="button"
-          className={`btn btn-sm ${effectiveEnabled ? 'btn-active' : ''}`}
-          disabled={!backendAvailable}
-          onClick={() => onToggle(!enabled)}
-          title="Toggle automatic photo download after capture"
-          aria-label="Toggle automatic photo download after capture"
-        >
-          {effectiveEnabled ? 'ON' : 'OFF'}
-        </button>
+        <div className="toolbar-row">
+          <a
+            className={`btn btn-sm ${!connected ? 'is-disabled' : ''}`}
+            href={connected ? getLatestPhotoUrl() : '#'}
+            download="photo_latest.jpg"
+            title="Download the most recently captured photo from the camera"
+            aria-label="Download latest photo"
+            aria-disabled={!connected}
+            style={!connected ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+            onClick={(e) => {
+              if (!connected) {
+                e.preventDefault();
+                return;
+              }
+              e.currentTarget.href = getLatestPhotoUrl();
+            }}
+          >
+            Download Latest
+          </a>
+          <button
+            type="button"
+            className={`btn btn-sm ${effectiveEnabled ? 'btn-active' : ''}`}
+            disabled={!backendAvailable}
+            onClick={() => onToggle(!enabled)}
+            title="Toggle automatic photo download after capture"
+            aria-label="Toggle automatic photo download after capture"
+          >
+            {effectiveEnabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
       </div>
 
-      <div className="autosave-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <div className="autosave-row">
         <div
           className={!backendAvailable ? 'is-disabled' : undefined}
           style={!backendAvailable ? { opacity: 0.55 } : undefined}
@@ -80,31 +100,15 @@ export function AutoSavePanel({
             </span>
           )}
         </div>
-        <a
-          className={`btn btn-sm ${!connected ? 'is-disabled' : ''}`}
-          href={connected ? getLatestPhotoUrl() : '#'}
-          download="photo_latest.jpg"
-          title="Download the most recently captured photo from the camera"
-          aria-label="Download latest photo"
-          aria-disabled={!connected}
-          style={!connected ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
-          onClick={(e) => {
-            if (!connected) {
-              e.preventDefault();
-              return;
-            }
-            e.currentTarget.href = getLatestPhotoUrl();
-          }}
-        >
-          Download Latest
-        </a>
+        {(savingStatus || lastSavedFile) && (
+          <span
+            className="autosave-status"
+            title={savingStatus ?? `Saved: ${lastSavedFile}`}
+          >
+            {savingStatus ?? `Saved: ${lastSavedFile}`}
+          </span>
+        )}
       </div>
-
-      {(savingStatus || lastSavedFile) && (
-        <div className="autosave-status">
-          {savingStatus ?? `Last saved: ${lastSavedFile}`}
-        </div>
-      )}
     </section>
   );
 }
