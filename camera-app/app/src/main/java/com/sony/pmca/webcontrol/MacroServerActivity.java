@@ -17,6 +17,7 @@ import android.text.format.Formatter;
 import android.util.Pair;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 import android.widget.TextView;
 
 import com.github.ma1co.pmcademo.app.BaseActivity;
@@ -46,11 +47,13 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private final RpcDispatcher m_rpc = new RpcDispatcher();
     private final LiveViewManager m_liveViewManager = new LiveViewManager();
 
+    private View m_topBar;
     private FocusScaleView m_focusScaleView;
     private BatteryView m_batteryView;
     private TextView m_tvCameraStatus;
     private TextView m_tvBattery;
     private TextView m_tvWifiStatus;
+    private boolean m_statusBarsVisible = true;
 
     private WifiManager m_wifiManager;
     private BroadcastReceiver m_networkStateReceiver;
@@ -66,6 +69,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private volatile String m_shutterSpeed = "--";
     private volatile int m_iso = 0;
     private volatile int m_digitalZoom = 100;
+    private volatile int m_focalLength = 0;
 
     public CameraEventHub getEventHub() {
         return m_eventHub;
@@ -99,6 +103,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
         m_surfaceHolder = surfaceView.getHolder();
         m_surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
 
+        m_topBar = findViewById(R.id.topBar);
         m_focusScaleView = (FocusScaleView) findViewById(R.id.vFocusScale);
         m_batteryView = (BatteryView) findViewById(R.id.vBattery);
         m_tvCameraStatus = (TextView) findViewById(R.id.tvCameraStatus);
@@ -373,6 +378,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
             m_camera.setFocalLengthChangeListener(new CameraEx.FocalLengthChangeListener() {
                 @Override
                 public void onFocalLengthChanged(int fl, CameraEx cameraEx) {
+                    m_focalLength = fl;
                     m_eventHub.setState("focalLength", fl);
                     JSONObject data = new JSONObject();
                     try {
@@ -380,6 +386,7 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
                     } catch (Throwable ignored) {
                     }
                     m_eventHub.emit("FocalLengthChange", data);
+                    updateStatusText();
                 }
             });
         } catch (Throwable ignored) {
@@ -696,8 +703,9 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     private void updateStatusText() {
         final String apStr = (m_aperture > 0) ? String.format(Locale.US, "F%.1f", m_aperture / 100.0f) : "F--";
         final String isoStr = (m_iso == 0) ? "AUTO" : String.valueOf(m_iso);
+        final String flStr = (m_focalLength > 0) ? ("  " + Math.round(m_focalLength / 10.0f) + "mm") : "";
         final String zoomStr = (m_digitalZoom > 100) ? String.format(Locale.US, "  DZ:%.1fx", m_digitalZoom / 100.0f) : "";
-        final String text = apStr + "  " + m_shutterSpeed + "  ISO:" + isoStr + zoomStr + "  MF:" + m_curFocus + "/" + m_maxFocus;
+        final String text = apStr + "  " + m_shutterSpeed + "  ISO:" + isoStr + flStr + zoomStr + "  MF:" + m_curFocus + "/" + m_maxFocus;
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -796,6 +804,39 @@ public class MacroServerActivity extends BaseActivity implements SurfaceHolder.C
     @Override
     protected boolean onShutterKeyUp() {
         return true;
+    }
+
+    @Override
+    protected boolean onUpKeyDown() {
+        return true;
+    }
+
+    @Override
+    protected boolean onUpKeyUp() {
+        toggleStatusBars();
+        return true;
+    }
+
+    @Override
+    protected boolean onEnterKeyDown() {
+        return true;
+    }
+
+    @Override
+    protected boolean onEnterKeyUp() {
+        toggleStatusBars();
+        return true;
+    }
+
+    private void toggleStatusBars() {
+        m_statusBarsVisible = !m_statusBarsVisible;
+        int visibility = m_statusBarsVisible ? View.VISIBLE : View.GONE;
+        if (m_topBar != null) {
+            m_topBar.setVisibility(visibility);
+        }
+        if (m_tvWifiStatus != null) {
+            m_tvWifiStatus.setVisibility(visibility);
+        }
     }
 
     @Override

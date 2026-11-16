@@ -187,12 +187,11 @@ export function ExposureControl({
             <span className="muted-tag">{state.lens.LensName}</span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {modeBadge && <span className="badge">{modeBadge}</span>}
-          {typeof state?.focalLength === 'number' && state.focalLength > 0 && (
-            <span className="badge">{Math.round(state.focalLength / 10)}mm</span>
-          )}
-        </div>
+        {modeBadge && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="badge">{modeBadge}</span>
+          </div>
+        )}
       </div>
 
       <div className="exposure-grid">
@@ -200,18 +199,19 @@ export function ExposureControl({
           <div className="metric-header-row">
             <span className="metric-label">Aperture</span>
             <span className="metric-value metric-value-inline">{aperture}</span>
-            <label className="metric-auto-toggle" title="Toggle automatic aperture">
-              <input
-                type="checkbox"
-                disabled={!connected || busy}
-                checked={autoAperture}
-                aria-label="Auto aperture"
-                onChange={(e) =>
-                  void runAction(() => setExposureAutoFlags(e.target.checked, autoShutter))
-                }
-              />
-              <span>Auto</span>
-            </label>
+            <button
+              type="button"
+              className={`btn btn-sm metric-auto-btn ${autoAperture ? 'btn-active' : ''}`}
+              disabled={!connected || busy}
+              aria-pressed={autoAperture}
+              aria-label="Auto aperture"
+              title="Toggle automatic aperture"
+              onClick={() =>
+                void runAction(() => setExposureAutoFlags(!autoAperture, autoShutter))
+              }
+            >
+              Auto
+            </button>
           </div>
           <div className="stepper-row">
             <button
@@ -241,18 +241,19 @@ export function ExposureControl({
           <div className="metric-header-row">
             <span className="metric-label">Shutter</span>
             <span className="metric-value metric-value-inline">{shutter}</span>
-            <label className="metric-auto-toggle" title="Toggle automatic shutter speed">
-              <input
-                type="checkbox"
-                disabled={!connected || busy}
-                checked={autoShutter}
-                aria-label="Auto shutter speed"
-                onChange={(e) =>
-                  void runAction(() => setExposureAutoFlags(autoAperture, e.target.checked))
-                }
-              />
-              <span>Auto</span>
-            </label>
+            <button
+              type="button"
+              className={`btn btn-sm metric-auto-btn ${autoShutter ? 'btn-active' : ''}`}
+              disabled={!connected || busy}
+              aria-pressed={autoShutter}
+              aria-label="Auto shutter speed"
+              title="Toggle automatic shutter speed"
+              onClick={() =>
+                void runAction(() => setExposureAutoFlags(autoAperture, !autoShutter))
+              }
+            >
+              Auto
+            </button>
           </div>
           <div className="stepper-row">
             <button

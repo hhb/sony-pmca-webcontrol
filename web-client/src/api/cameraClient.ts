@@ -280,8 +280,8 @@ export class CameraClient {
     void fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
   }
 
-  latestPhotoUrl(ts = Date.now()): string {
-    return `${this.baseUrl}/api/photos/latest?t=${ts}`;
+  latestPhotoUrl(ts = Date.now(), inline = false): string {
+    return `${this.baseUrl}/api/photos/latest?t=${ts}${inline ? '&inline=1' : ''}`;
   }
 
   photoDownloadUrl(path: string): string {

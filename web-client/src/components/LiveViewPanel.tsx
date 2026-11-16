@@ -7,6 +7,7 @@ interface LiveViewPanelProps {
   onCapture: () => void;
   capturing: boolean;
   previewMagnification?: CameraState['previewMagnification'];
+  onOpenLatestPhoto?: () => void;
   onError?: (msg: string | null) => void;
 }
 
@@ -28,6 +29,7 @@ export function LiveViewPanel({
   onCapture,
   capturing,
   previewMagnification,
+  onOpenLatestPhoto,
   onError,
 }: LiveViewPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -671,6 +673,17 @@ export function LiveViewPanel({
             <span className="badge">
               {afStatus === 'focusing' ? 'AF...' : afStatus === 'ok' ? 'AF OK' : 'AF Fail'}
             </span>
+          )}
+          {onOpenLatestPhoto && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!connected}
+              onClick={onOpenLatestPhoto}
+              title="Open the latest photo from the camera in a new tab"
+            >
+              🖼 Open Latest
+            </button>
           )}
         </div>
       </div>

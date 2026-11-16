@@ -8,6 +8,7 @@ import {
 import {
   isDirectoryPickerSupported,
   pickSaveDirectory,
+  readFileFromDirectory,
   saveBlobToDirectory,
   triggerBrowserDownload,
 } from './api/localSave';
@@ -27,6 +28,7 @@ import { ExposureControl } from './components/ExposureControl';
 import { FocusControl } from './components/FocusControl';
 import { LiveViewPanel } from './components/LiveViewPanel';
 import { PhotoBrowser } from './components/PhotoBrowser';
+import { PhotoPreviewModal } from './components/PhotoPreviewModal';
 import { RpcInspector } from './components/RpcInspector';
 
 type TabKey = 'control' | 'photos' | 'events' | 'rpc';
@@ -136,11 +138,25 @@ export function App() {
     }
   });
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const [previewPhoto, setPreviewPhoto] = useState<{ url: string; name: string } | null>(null);
 
   const seqRef = useRef<number>(0);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const latestSavedRef = useRef<{ blob: Blob; name: string } | null>(null);
+  const lastSavedFileRef = useRef<string | null>(null);
+  const activeSavePromiseRef = useRef<Promise<void> | null>(null);
+  const openedTabUrlsRef = useRef<string[]>([]);
   const activeUrlRef = useRef<string>(activeUrl);
   activeUrlRef.current = activeUrl;
+
+  useEffect(() => {
+    return () => {
+      for (const u of openedTabUrlsRef.current) {
+        URL.revokeObjectURL(u);
+      }
+      openedTabUrlsRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     if (__CAMERA_EMBEDDED__) return;
@@ -185,6 +201,8 @@ export function App() {
         } else {
           triggerBrowserDownload(task.name, blob);
         }
+        latestSavedRef.current = { blob, name: task.name };
+        lastSavedFileRef.current = task.name;
         setSavedCount((c) => c + 1);
         setLastSavedFile(task.name);
       } catch (err) {
@@ -199,10 +217,17 @@ export function App() {
 
   const queueSavePhoto = useCallback(
     (task: { name: string; url: string }): Promise<void> => {
-      return new Promise<void>((resolve) => {
+      const promise = new Promise<void>((resolve) => {
         saveQueueRef.current.push({ ...task, resolve });
         void processSaveQueue();
       });
+      activeSavePromiseRef.current = promise;
+      void promise.finally(() => {
+        if (activeSavePromiseRef.current === promise) {
+          activeSavePromiseRef.current = null;
+        }
+      });
+      return promise;
     },
     [processSaveQueue],
   );
@@ -550,6 +575,64 @@ export function App() {
     }
   };
 
+  const openBlobInNewTab = useCallback(
+    async (loader: () => Promise<{ blob: Blob; name: string }>) => {
+      const popup = window.open('', '_blank');
+      if (popup) {
+        try {
+          popup.document.open();
+          popup.document.write(
+            '<!doctype html><title>Loading photo...</title><body style="margin:0;background:#0d1117;color:#c9d1d9;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui,sans-serif">Loading photo...</body>',
+          );
+          popup.document.close();
+        } catch {
+          // ignore cross-context write issues
+        }
+      }
+      try {
+        const { blob, name } = await loader();
+        const url = URL.createObjectURL(blob);
+        openedTabUrlsRef.current.push(url);
+        if (openedTabUrlsRef.current.length > 10) {
+          const old = openedTabUrlsRef.current.shift();
+          if (old) URL.revokeObjectURL(old);
+        }
+        if (popup && !popup.closed) {
+          popup.location.replace(url);
+        } else {
+          setPreviewPhoto({ url, name });
+        }
+      } catch (err) {
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [],
+  );
+
+  const handleOpenLatestPhoto = useCallback(() => {
+    window.open(client.latestPhotoUrl(Date.now(), true), '_blank', 'noopener,noreferrer');
+  }, [client]);
+
+  const handleOpenSavedPhoto = useCallback(() => {
+    void openBlobInNewTab(async () => {
+      if (activeSavePromiseRef.current) {
+        await activeSavePromiseRef.current;
+      }
+      const name = lastSavedFileRef.current;
+      if (dirHandleRef.current && name) {
+        const file = await readFileFromDirectory(dirHandleRef.current, name);
+        return { blob: file, name };
+      }
+      if (latestSavedRef.current) {
+        return { blob: latestSavedRef.current.blob, name: latestSavedRef.current.name };
+      }
+      throw new Error('No local auto-saved photo in this session yet');
+    });
+  }, [openBlobInNewTab]);
+
   const wifiLabel =
     typeof state?.wifi === 'string'
       ? state.wifi
@@ -638,6 +721,7 @@ export function App() {
               onCapture={handleCapture}
               capturing={Boolean(state?.capturing)}
               previewMagnification={state?.previewMagnification}
+              onOpenLatestPhoto={__CAMERA_EMBEDDED__ ? handleOpenLatestPhoto : undefined}
               onError={setErrorMsg}
             />
             <div className="side-column">
@@ -692,7 +776,8 @@ export function App() {
                   lastSavedFile={lastSavedFile}
                   savingStatus={savingStatus}
                   connected={connected}
-                  getLatestPhotoUrl={() => client.latestPhotoUrl()}
+                  getLatestPhotoUrl={(inline = false) => client.latestPhotoUrl(Date.now(), inline)}
+                  onOpenSavedPhoto={handleOpenSavedPhoto}
                 />
               )}
             </div>
@@ -713,6 +798,12 @@ export function App() {
 
         {tab === 'rpc' && <RpcInspector client={client} connected={connected} />}
       </main>
+
+      <PhotoPreviewModal
+        url={previewPhoto?.url ?? null}
+        title={previewPhoto?.name ?? 'Latest Capture'}
+        onClose={() => setPreviewPhoto(null)}
+      />
     </div>
   );
 }

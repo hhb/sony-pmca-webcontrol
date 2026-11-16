@@ -32,6 +32,14 @@ export async function saveBlobToDirectory(
   }
 }
 
+export async function readFileFromDirectory(
+  dirHandle: FileSystemDirectoryHandle,
+  filename: string,
+): Promise<File> {
+  const fileHandle = await dirHandle.getFileHandle(filename);
+  return fileHandle.getFile();
+}
+
 export function triggerBrowserDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

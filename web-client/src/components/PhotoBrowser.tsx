@@ -5,6 +5,7 @@ import {
   type PhotoEntry,
   formatBytes,
 } from '../api/cameraClient';
+import { PhotoPreviewModal } from './PhotoPreviewModal';
 
 interface PhotoBrowserProps {
   client: CameraClient;
@@ -168,23 +169,11 @@ export function PhotoBrowser({ client, connected, onError }: PhotoBrowserProps) 
         {!connected && <div className="empty-state">Connect to browse SD card</div>}
       </div>
 
-      {previewUrl && (
-        <div className="modal-backdrop" onClick={() => setPreviewUrl(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <span>{previewName}</span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setPreviewUrl(null)}
-              >
-                Close
-              </button>
-            </div>
-            <img src={previewUrl} alt={previewName} className="modal-image" />
-          </div>
-        </div>
-      )}
+      <PhotoPreviewModal
+        url={previewUrl}
+        title={previewName}
+        onClose={() => setPreviewUrl(null)}
+      />
     </section>
   );
 }

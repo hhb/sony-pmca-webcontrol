@@ -201,15 +201,16 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/photos/latest".equals(uri)) {
+                boolean inline = "1".equals(params.get("inline"));
                 byte[] inMem = m_activity.getLiveViewManager().getLastCapturedJpeg();
                 if (inMem != null && inMem.length > 0) {
                     Response res = new Response(Response.Status.OK, "image/jpeg", new ByteArrayInputStream(inMem));
-                    res.addHeader("Content-Disposition", "attachment; filename=\"latest_capture.jpg\"");
+                    res.addHeader("Content-Disposition", (inline ? "inline" : "attachment") + "; filename=\"latest_capture.jpg\"");
                     return addCors(res);
                 }
                 File latest = PhotoStorageHelper.getLatestPhotoFile();
                 if (latest != null && latest.exists() && latest.isFile()) {
-                    return serveFileDownload(latest);
+                    return serveFileDownload(latest, inline);
                 }
                 return jsonError(Response.Status.NOT_FOUND, "No captured photo available yet");
             }
@@ -222,6 +223,7 @@ public class MacroHttpServer extends NanoHTTPD {
             }
 
             if ("/api/photos/download".equals(uri)) {
+                boolean inline = "1".equals(params.get("inline"));
                 String path = params.get("path");
                 if (path == null || path.trim().isEmpty()) {
                     path = params.get("file");
@@ -230,7 +232,7 @@ public class MacroHttpServer extends NanoHTTPD {
                 if (target == null || !target.exists() || !target.isFile()) {
                     return jsonError(Response.Status.NOT_FOUND, "Photo file not found");
                 }
-                return serveFileDownload(target);
+                return serveFileDownload(target, inline);
             }
 
             if ("/api/log".equals(uri)) {
@@ -396,13 +398,13 @@ public class MacroHttpServer extends NanoHTTPD {
         }
     }
 
-    private Response serveFileDownload(File file) {
+    private Response serveFileDownload(File file, boolean inline) {
         try {
             String lower = file.getName().toLowerCase();
             String mime = lower.endsWith(".arw") ? "application/octet-stream" : "image/jpeg";
             FileInputStream fis = new FileInputStream(file);
             Response res = new Response(Response.Status.OK, mime, fis);
-            res.addHeader("Content-Disposition", "attachment; filename=\"" + file.getName() + "\"");
+            res.addHeader("Content-Disposition", (inline ? "inline" : "attachment") + "; filename=\"" + file.getName() + "\"");
             res.addHeader("Content-Length", String.valueOf(file.length()));
             return addCors(res);
         } catch (FileNotFoundException e) {

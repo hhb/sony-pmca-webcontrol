@@ -279,6 +279,30 @@ export function FocusControl({
     abortRef.current?.abort();
   };
 
+  const focalLabel =
+    typeof state?.focalLength === 'number' && state.focalLength > 0
+      ? `${Math.round(state.focalLength / 10)}mm`
+      : null;
+
+  const renderZoomButton = (dir: 0 | 1, label: string, hint: string) => (
+    <button
+      key={label}
+      type="button"
+      className="btn btn-sm"
+      disabled={!connected || busy}
+      title={hint}
+      aria-label={hint}
+      onPointerDown={(e) => handleZoomPointerDown(dir, e)}
+      onPointerUp={() => handleZoomPointerEnd(dir)}
+      onPointerCancel={() => handleZoomPointerEnd(dir)}
+      onClick={(e) => {
+        if (e.detail === 0) void stepZoom(dir);
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -292,31 +316,21 @@ export function FocusControl({
             / {maxFocus ?? '--'}
           </span>
         </div>
-        {state?.powerZoom && (
-          <div className="toolbar-row">
-            {(
-              [
-                { dir: ZOOM_WIDE as 0 | 1, label: 'Zoom -', hint: 'Zoom wide (tap for 1 step, hold for continuous zoom)' },
-                { dir: ZOOM_TELE as 0 | 1, label: 'Zoom +', hint: 'Zoom tele (tap for 1 step, hold for continuous zoom)' },
-              ]
-            ).map(({ dir, label, hint }) => (
-              <button
-                key={label}
-                type="button"
-                className="btn btn-sm"
-                disabled={!connected || busy}
-                title={hint}
-                aria-label={hint}
-                onPointerDown={(e) => handleZoomPointerDown(dir, e)}
-                onPointerUp={() => handleZoomPointerEnd(dir)}
-                onPointerCancel={() => handleZoomPointerEnd(dir)}
-                onClick={(e) => {
-                  if (e.detail === 0) void stepZoom(dir);
-                }}
-              >
-                {label}
-              </button>
-            ))}
+        {(state?.powerZoom || focalLabel) && (
+          <div className="toolbar-row" style={{ alignItems: 'center' }}>
+            {state?.powerZoom &&
+              renderZoomButton(
+                ZOOM_WIDE as 0 | 1,
+                'Zoom -',
+                'Zoom wide (tap for 1 step, hold for continuous zoom)',
+              )}
+            {focalLabel && <span className="badge">{focalLabel}</span>}
+            {state?.powerZoom &&
+              renderZoomButton(
+                ZOOM_TELE as 0 | 1,
+                'Zoom +',
+                'Zoom tele (tap for 1 step, hold for continuous zoom)',
+              )}
           </div>
         )}
       </div>
