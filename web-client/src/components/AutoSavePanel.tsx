@@ -5,8 +5,6 @@ interface AutoSavePanelProps {
   onToggle: (enabled: boolean) => void;
   dirName: string | null;
   onPickDirectory: () => void;
-  backendAvailable: boolean;
-  unavailableReason: string;
   savedCount: number;
   lastSavedFile: string | null;
   savingStatus: string | null;
@@ -20,8 +18,6 @@ export function AutoSavePanel({
   onToggle,
   dirName,
   onPickDirectory,
-  backendAvailable,
-  unavailableReason,
   savedCount,
   lastSavedFile,
   savingStatus,
@@ -30,29 +26,17 @@ export function AutoSavePanel({
   onOpenSavedPhoto,
 }: AutoSavePanelProps) {
   const pickerSupported = isDirectoryPickerSupported();
-  const effectiveEnabled = backendAvailable && enabled;
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className={!backendAvailable ? 'is-disabled' : undefined} style={!backendAvailable ? { opacity: 0.55 } : undefined}>
-            Save
-          </span>
-          {!backendAvailable && (
-            <span className="info-tooltip-wrap">
-              <span className="info-icon" tabIndex={0} aria-label={unavailableReason}>
-                i
-              </span>
-              <span className="info-tooltip-bubble">{unavailableReason}</span>
-            </span>
-          )}
+          <span>Save</span>
           <button
             type="button"
-            className={`btn btn-sm ${effectiveEnabled ? 'btn-active' : ''}`}
-            disabled={!backendAvailable}
+            className={`btn btn-sm ${enabled ? 'btn-active' : ''}`}
             onClick={() => onToggle(!enabled)}
-            aria-pressed={effectiveEnabled}
+            aria-pressed={enabled}
             title="Toggle automatic photo download after capture"
             aria-label="Toggle automatic photo download after capture"
           >
@@ -102,23 +86,19 @@ export function AutoSavePanel({
       </div>
 
       <div className="autosave-row">
-        <div
-          className={!backendAvailable ? 'is-disabled' : undefined}
-          style={!backendAvailable ? { opacity: 0.55 } : undefined}
-        >
+        <div>
           {pickerSupported ? (
             <button
               type="button"
-              className={`btn btn-sm ${effectiveEnabled && !dirName ? 'btn-primary' : ''}`}
-              disabled={!backendAvailable}
+              className={`btn btn-sm ${enabled && !dirName ? 'btn-primary' : ''}`}
               onClick={onPickDirectory}
               title="Choose local folder for auto-saved photos"
             >
-              {dirName ? `Folder: ${dirName}` : effectiveEnabled ? 'Select Folder to Save' : 'Choose Local Folder'}
+              {dirName ? `Folder: ${dirName}` : enabled ? 'Select Folder to Save' : 'Choose Local Folder'}
             </button>
           ) : (
             <span className="muted-tag">
-              Folder picker unavailable (HTTPS/localhost Chromium required); will use browser download
+              Browser download mode (HTTPS/localhost required for folder picker)
             </span>
           )}
         </div>

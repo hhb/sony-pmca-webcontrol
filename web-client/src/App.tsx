@@ -163,7 +163,7 @@ export function App() {
     void fetchHostCapabilities().then(setHostCaps);
   }, []);
   const autoSaveRef = useRef<boolean>(false);
-  autoSaveRef.current = !__CAMERA_EMBEDDED__ && hostCaps.backend && autoSaveEnabled;
+  autoSaveRef.current = autoSaveEnabled;
 
   const refreshState = useCallback(async () => {
     try {
@@ -261,7 +261,6 @@ export function App() {
 
   const handleCaptureEvent = useCallback(
     (ev: CameraEvent) => {
-      if (__CAMERA_EMBEDDED__) return;
       if (ev.type !== 'Jpeg') return;
 
       const dedupKey = `jpeg_${ev.seq}`;
@@ -273,7 +272,7 @@ export function App() {
 
       const waiter = stackShotWaitersRef.current.shift();
 
-      const mergeSession = backendMergeSessionRef.current;
+      const mergeSession = __CAMERA_EMBEDDED__ ? null : backendMergeSessionRef.current;
       if (mergeSession) {
         const grabTask = grabLatestToBackendStack(mergeSession.sessionId, activeUrlRef.current)
           .then(() => undefined)
@@ -612,10 +611,6 @@ export function App() {
     [],
   );
 
-  const handleOpenLatestPhoto = useCallback(() => {
-    window.open(client.latestPhotoUrl(Date.now(), true), '_blank', 'noopener,noreferrer');
-  }, [client]);
-
   const handleOpenSavedPhoto = useCallback(() => {
     void openBlobInNewTab(async () => {
       if (activeSavePromiseRef.current) {
@@ -721,7 +716,6 @@ export function App() {
               onCapture={handleCapture}
               capturing={Boolean(state?.capturing)}
               previewMagnification={state?.previewMagnification}
-              onOpenLatestPhoto={__CAMERA_EMBEDDED__ ? handleOpenLatestPhoto : undefined}
               onError={setErrorMsg}
             />
             <div className="side-column">
@@ -751,35 +745,30 @@ export function App() {
                 }}
                 mergeStatus={mergeStatus}
                 onStackSessionStart={__CAMERA_EMBEDDED__ ? undefined : handleStackSessionStart}
-                onCaptureStackShot={__CAMERA_EMBEDDED__ ? undefined : captureStackShot}
+                onCaptureStackShot={captureStackShot}
                 onStackSessionEnd={__CAMERA_EMBEDDED__ ? undefined : handleStackSessionEnd}
               />
-              {!__CAMERA_EMBEDDED__ && (
-                <AutoSavePanel
-                  enabled={autoSaveEnabled}
-                  onToggle={(next) => {
-                    if (!hostCaps.backend) return;
-                    if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
-                      void handlePickDirectory();
-                    } else {
-                      setAutoSaveEnabled(next);
-                      try {
-                        localStorage.setItem('pmca_autosave_enabled', String(next));
-                      } catch {}
-                    }
-                  }}
-                  dirName={saveDirName}
-                  onPickDirectory={() => void handlePickDirectory()}
-                  backendAvailable={hostCaps.backend}
-                  unavailableReason="Host backend not detected. Browser local Auto-Save requires running the UI via host-server/server.py due to browser filesystem permissions."
-                  savedCount={savedCount}
-                  lastSavedFile={lastSavedFile}
-                  savingStatus={savingStatus}
-                  connected={connected}
-                  getLatestPhotoUrl={(inline = false) => client.latestPhotoUrl(Date.now(), inline)}
-                  onOpenSavedPhoto={handleOpenSavedPhoto}
-                />
-              )}
+              <AutoSavePanel
+                enabled={autoSaveEnabled}
+                onToggle={(next) => {
+                  if (next && isDirectoryPickerSupported() && !dirHandleRef.current) {
+                    void handlePickDirectory();
+                  } else {
+                    setAutoSaveEnabled(next);
+                    try {
+                      localStorage.setItem('pmca_autosave_enabled', String(next));
+                    } catch {}
+                  }
+                }}
+                dirName={saveDirName}
+                onPickDirectory={() => void handlePickDirectory()}
+                savedCount={savedCount}
+                lastSavedFile={lastSavedFile}
+                savingStatus={savingStatus}
+                connected={connected}
+                getLatestPhotoUrl={(inline = false) => client.latestPhotoUrl(Date.now(), inline)}
+                onOpenSavedPhoto={handleOpenSavedPhoto}
+              />
             </div>
           </div>
         )}
