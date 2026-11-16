@@ -9,16 +9,16 @@ An open-source **Sony Imaging Edge alternative** and **Wi-Fi tethering** solutio
 You don't need Android Studio or Node.js to try it out:
 1. Download the prebuilt `sony-pmca-webcontrol-debug-1.0.0.apk` (and optionally the single-file `index.html`) from **GitHub Releases** or the latest **GitHub Actions** run artifacts.
 2. Flash the `.apk` to your camera via USB using [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE) (see [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for step-by-step instructions).
-3. Launch **Sony PMCA WebControl** in your camera's *Application* menu and open the displayed IP in your browser (or run `web-client/` for the full React UI with Focus Peaking, Focus Loupe, Focus Stacking, and auto-save).
+3. Launch **Sony PMCA WebControl** in your camera's *Application* menu and open `http://<camera-ip>:8080` directly in your browser (it serves the pre-compressed React UI from the camera itself; optionally run `host-server/` for browser local Auto-Save & OpenFocus merging).
 
 ## Key Features
 
 * **Direct Home Wi-Fi Connection**: Connects directly to your existing Wi-Fi router (no need to disconnect your Mac or iPad from the internet to join an ad-hoc camera hotspot) and displays its LAN IP address on the camera screen (port `80` or `8080`).
 * **Universal Reflective RPC & High-Level Closed-Loop APIs (`POST /api/call` & `GET /api/describe`)**: Exposes Sony's underlying `CameraEx`, `ParametersModifier`, `Camera.Parameters`, and whitelisted Scalar static/system classes over HTTP with automatic JSON ↔ Java conversion and batching, plus device-side `highlevel` closed-loop setters (`setFocusPosition`, `setAperture`, `setShutterSpeed`, `setZoomPosition`).
 * **Real-Time Event Stream & MJPEG Live View**: Hardware-accelerated 640px JPEG preview stream (`/api/liveview.mjpeg` and `/api/liveview.jpg`) plus long-polling `CameraEx` listener events (`/api/events`) and state snapshots (`/api/state`).
-* **Modern React Web Client (`web-client/`)**: Single-file React + TypeScript app featuring live Focus Peaking, rule-of-thirds grid, luma histogram, 2x–4x click-to-magnify Focus Loupe, exposure & EV compensation controls, automated focus stacking (with `Auto` shot count calculation), SD card photo browser, auto-save (`capture_YYYYMMDD_HHMMSS.jpg`), and an interactive RPC Inspector.
+* **Modern React Web Client (`web-client/`)**: Single-file React + TypeScript app featuring live Focus Peaking, rule-of-thirds grid, luma histogram, click-to-magnify Focus Loupe (`5.9x / 11.7x`), exposure & EV compensation controls, tap/hold power zoom, selectable MJPEG/JPEG debug transport, automated focus stacking, SD card photo browser, auto-save (`capture_YYYYMMDD_HHMMSS.jpg`) + Download Latest, and an interactive RPC Inspector.
 * **Optional Host Companion Backend (`host-server/`)**: Zero-dependency Python 3 server that proxies `/api/*` to the camera, unlocks browser local **Auto-Save** permissions (greyed out when no backend is present), and integrates with [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) to automatically align/merge focus stacks and save only the single resulting `.jpg` to your browser's local machine.
-* **Built-in Fallback Web UI**: Opening `http://<camera-ip>:8080` directly in any browser serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.
+* **Pre-Compressed In-Camera Web UI**: Opening `http://<camera-ip>:8080` directly in any modern browser serves the camera-embedded conditional build of `web-client/` (`assets/index.html.gzip`, ~87 KB over Wi-Fi via `Content-Encoding: gzip`), omitting host-only controls such as Auto-Save and Auto Merge.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ You don't need Android Studio or Node.js to try it out:
 
 ### 3. Host / Flashing Requirements
 * **Flashing (One-Time)**: Linux (recommended, via `libusb`) or Windows, Python 3.9+ in a `venv`, and [Sony-PMCA-RE (`pmca-console`)](https://github.com/ma1co/Sony-PMCA-RE).
-* **Daily Operation / Web Client**: Any OS (macOS, iPadOS, Linux, Windows) on the same Wi-Fi LAN. Node.js 22+ (`>=22.12.0`) to run or build `web-client/` (or open `http://<camera-ip>:8080` directly for the built-in fallback UI).
+* **Daily Operation / Web Client**: Any OS (macOS, iPadOS, Linux, Windows) on the same Wi-Fi LAN — just open `http://<camera-ip>:8080` directly in any modern browser, or use Node.js 22+ (`>=22.12.0`) / Python 3 (`host-server/`) for host-side Auto-Save and OpenFocus merging.
 
 ## Documentation
 

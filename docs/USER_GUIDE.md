@@ -72,7 +72,7 @@ You can control the camera in two ways:
 
 ### Option A: Full React Web Client (`web-client/`)
 Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/` for HTTPS local development, which is required by browsers for `showDirectoryPicker` auto-save) and connect to your camera's IP:
-* **LiveView**: Canvas-based MJPEG stream with client-side **Focus Peaking**, **Rule-of-Thirds Grid**, **Luma Histogram**, and **2x–4x Click-to-Magnify Focus Loupe**. Automatically pauses and notifies the camera to release the stream slot when you switch browser tabs or minimize the window.
+* **LiveView**: Canvas-based MJPEG stream (with a debug toggle to `/api/liveview.jpg` polling) featuring client-side **Focus Peaking**, **Rule-of-Thirds Grid**, **Luma Histogram**, and **5.9x / 11.7x Click-to-Magnify Focus Loupe**. Automatically pauses and notifies the camera to release the stream slot when you switch browser tabs or minimize the window.
 * **Exposure & Capture**: Real-time aperture, shutter speed, ISO, EV compensation controls, and remote shutter release.
 * **Focus & Stacking**: Multi-speed manual focus stepping, power zoom, and automated closed-loop **Focus Bracketing / Focus Stacking** between `Start A` and `End B`.
   * Set **Step** to control the focus position increment per shot; the total shot count is calculated automatically (including `End B` if not evenly divisible).
@@ -93,4 +93,4 @@ python3 host-server/server.py --camera http://<camera-ip>:8080 --openfocus-dir /
 Then open `https://localhost:8000` (or `https://<host-ip>:8000` over LAN, accepting the self-signed certificate) in your browser. HTTPS is always enabled so `showDirectoryPicker` Auto-Save works across your LAN.
 
 ### Option C: Built-in Fallback UI
-Opening `http://<camera-ip>:8080` directly in any browser on your LAN serves a lightweight built-in control page (`camera-app/app/src/main/assets/index.html`) with selectable MJPEG/JPG LiveView for quick testing without running `web-client/`.
+Opening `http://<camera-ip>:8080` directly in any modern browser on your LAN serves the pre-compressed, camera-embedded React UI (`assets/index.html.gzip`, served with `Content-Encoding: gzip`), so you get LiveView, Focus Peaking, Exposure, Focus Stacking, Photos, Events, and RPC Inspector without running a separate host server (host-only features like Auto-Save and Auto Merge are compiled out).

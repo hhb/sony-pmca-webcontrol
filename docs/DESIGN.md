@@ -14,7 +14,7 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
 * **Thin Stateless Hardware Bridge**: Instead of hardcoding high-level workflows (like focus bracketing state machines) inside the camera APK, the camera exposes a **universal reflective JSON-RPC endpoint** (`POST /api/call` + `GET /api/describe`) backed by `RpcDispatcher`. Any `CameraEx`, `CameraEx.ParametersModifier`, whitelisted `Camera.Parameters`, or Scalar static/system method can be invoked without reflashing the APK.
 * **Event-Driven State & Long Polling**: `CameraEventHub` subscribes to all major `CameraEx` listeners (`FocusDriveListener`, `ApertureChangeListener`, `ShutterSpeedChangeListener`, `SettingChangedListener`, `StoreImageCompleteListener`, `ZoomChangeListener`, etc.), caches the latest state snapshot (`/api/state`), and streams events over a 256-entry ring buffer (`/api/events`).
 * **Hardware JPEG LiveView (`CameraSequence`)**: `LiveViewManager` uses `CameraSequence.startPreviewSequence()` (`640px` hardware-encoded JPEG frames via `DeviceBuffer`) rather than CPU-heavy software `YuvImage` compression. Frames are pushed to `multipart/x-mixed-replace` MJPEG clients (`/api/liveview.mjpeg`) with adaptive frame intervals (`33ms`/`50ms`/`85ms` for 1/2/3+ clients) as well as single-frame snapshots (`/api/liveview.jpg`).
-* **LAN Web Server**: `WifiManager` connects the camera directly to a saved home/studio Wi-Fi router, while `MacroHttpServer` (`NanoHTTPD` on port `80` with fallback to `8080`, CORS enabled) serves the REST API and a built-in fallback HTML page (`assets/index.html`).
+* **LAN Web Server**: `WifiManager` connects the camera directly to a saved home/studio Wi-Fi router, while `MacroHttpServer` (`NanoHTTPD` on port `80` with fallback to `8080`, CORS enabled) serves the REST API and the pre-compressed camera-embedded React UI (`assets/index.html.gzip` via `Content-Encoding: gzip`).
 
 ## 3. System Architecture
 
@@ -53,7 +53,7 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
 +-----------------------------------------------------------------------+
 |                  Web Client (web-client/, React + TS)                 |
 |  - CameraClient SDK (src/api/cameraClient.ts)                         |
-|  - LiveViewPanel (MJPEG parser, Peaking, Histogram, 2x-4x Focus Loupe)|
+|  - LiveViewPanel (MJPEG/JPG, Peaking, Histogram, 5.9x/11.7x Loupe) |
 |  - FocusControl (Device-side closed-loop gotoFocus & focus stacking)  |
 |  - ExposureControl, PhotoBrowser, AutoSavePanel, RpcInspector         |
 +-----------------------------------------------------------------------+
@@ -73,8 +73,8 @@ Internally, PlayMemories-capable Sony cameras run an embedded **Android 2.3.3 (A
 
 ### 4.3 LiveView Stream Management, Canvas Processing & Auto-Save
 * `LiveViewManager` maintains up to `MAX_MJPEG_CLIENTS = 3` concurrent MJPEG clients in an `ArrayList<MjpegClient>` keyed by client-generated `cid` (per-tab `sessionStorage` ID). Reconnecting with the same `cid` replaces that tab's previous stream immediately; exceeding 3 distinct clients evicts the oldest (`index 0`).
-* Both `web-client` (`LiveViewPanel.tsx`) and the built-in fallback UI (`assets/index.html`) automatically pause LiveView on `visibilitychange` (`hidden`) and notify `POST /api/liveview/close?cid=...` via `navigator.sendBeacon` (or `fetch(..., { keepalive: true })`) on pause, tab switch, or `pagehide`, waking `waitForNextFrame()` immediately.
-* `LiveViewPanel.tsx` reads the `/api/liveview.mjpeg` byte stream via `fetch()` + `ReadableStream`, decoding only the newest frame (zero backlog) onto `<canvas>` with optional real-time client-side **Focus Peaking**, **Luma Histogram**, **Rule-of-Thirds Grid**, and a **2x–4x Click-to-Magnify Focus Loupe**.
+* `LiveViewPanel.tsx` automatically pauses LiveView on `visibilitychange` (`hidden`) and notifies `POST /api/liveview/close?cid=...` via `navigator.sendBeacon` (or `fetch(..., { keepalive: true })`) on pause, tab switch, or `pagehide`, waking `waitForNextFrame()` immediately.
+* `LiveViewPanel.tsx` reads the `/api/liveview.mjpeg` byte stream via `fetch()` + `ReadableStream` (or `/api/liveview.jpg` in debug polling mode), decoding only the newest frame (zero backlog) onto `<canvas>` with optional real-time client-side **Focus Peaking**, **Luma Histogram**, **Rule-of-Thirds Grid**, and a **5.9x / 11.7x Click-to-Magnify Focus Loupe**.
 * `App.tsx` listens for `Jpeg` events on `/api/events` (from `PictureCallback.onPictureTaken` via `/api/photos/latest`) and generates local-time filenames: `capture_YYYYMMDD_HHMMSS.jpg` for single shots, and `capture_YYYYMMDD_HHMMSS_001.jpg`, `_002.jpg`, ... for focus stacks. Photos are saved to the **browser machine's local filesystem** via the File System Access API (`showDirectoryPicker`) or standard browser downloads. Due to browser permission restrictions without a host backend, Auto-Save is gated by `/local-api/capabilities` (`backend === true`) and greyed out with an `i` tooltip when unavailable.
 
 ### 4.4 Host Companion Backend & OpenFocus Integration (`host-server/`)
