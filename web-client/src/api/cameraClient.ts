@@ -334,6 +334,42 @@ export class CameraClient {
     return this.call('params', 'setSceneMode', [mode]);
   }
 
+  getWhiteBalance(): Promise<string> {
+    return this.call<string>('params', 'getWhiteBalance');
+  }
+
+  setWhiteBalance(mode: string): Promise<unknown> {
+    return this.call('params', 'setWhiteBalance', [mode]);
+  }
+
+  getSupportedWhiteBalance(): Promise<string[]> {
+    return this.call<string[]>('params', 'getSupportedWhiteBalance');
+  }
+
+  getColorTemperature(): Promise<number> {
+    return this.call<number>('modifier', 'getColorTemperatureForWhiteBalance');
+  }
+
+  setColorTemperature(kelvin: number): Promise<unknown> {
+    return this.call('modifier', 'setColorTemperatureForWhiteBalance', [kelvin]);
+  }
+
+  getWhiteBalanceLightBalance(): Promise<number> {
+    return this.call<number>('modifier', 'getLightBalanceForWhiteBalance');
+  }
+
+  setWhiteBalanceLightBalance(value: number): Promise<unknown> {
+    return this.call('modifier', 'setLightBalanceForWhiteBalance', [value]);
+  }
+
+  getWhiteBalanceColorComp(): Promise<number> {
+    return this.call<number>('modifier', 'getColorCompensationForWhiteBalance');
+  }
+
+  setWhiteBalanceColorComp(value: number): Promise<unknown> {
+    return this.call('modifier', 'setColorCompensationForWhiteBalance', [value]);
+  }
+
   startZoom(direction: 0 | 1, speed = 1): Promise<unknown> {
     return this.call('camera', 'startZoom', [direction, speed]);
   }

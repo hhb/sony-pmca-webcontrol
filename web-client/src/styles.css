@@ -442,6 +442,51 @@ body {
   align-items: center;
 }
 
+.metric-card-wide {
+  grid-column: 1 / -1;
+}
+
+.wb-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.wb-kelvin-select {
+  width: 84px;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.wb-shift-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.wb-shift-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.wb-step-btn {
+  padding: 2px 8px;
+  font-size: 0.76rem;
+}
+
+.wb-shift-val {
+  min-width: 22px;
+  text-align: center;
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .metric-auto-btn {
   padding: 2px 7px;
   font-size: 0.72rem;
