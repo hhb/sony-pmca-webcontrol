@@ -66,7 +66,7 @@ If you don't want to set up Python dependencies or USB drivers manually, use **[
 
 ## 4. Using the Web Control UI
 
-![Sony PMCA WebControl Web UI](./screenshot.jpg)
+![Sony PMCA WebControl Web UI](./screenshot.png)
 
 You can control the camera in two ways:
 
