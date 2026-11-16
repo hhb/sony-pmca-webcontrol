@@ -165,16 +165,25 @@ export function App() {
   const autoSaveRef = useRef<boolean>(false);
   autoSaveRef.current = autoSaveEnabled;
 
-  const refreshState = useCallback(async () => {
+  const refreshState = useCallback(async (): Promise<boolean> => {
     try {
       const s = await client.getState();
       setState(s);
-      seqRef.current = Math.max(seqRef.current, s.seq ?? 0);
+      if (typeof s.seq === 'number') {
+        if (s.seq + 10 < seqRef.current) {
+          seqRef.current = s.seq;
+          handledFilesRef.current.clear();
+        } else {
+          seqRef.current = Math.max(seqRef.current, s.seq);
+        }
+      }
       setConnected(true);
       setErrorMsg(null);
+      return true;
     } catch (err) {
       setConnected(false);
       setErrorMsg(err instanceof Error ? err.message : String(err));
+      return false;
     }
   }, [client]);
 
@@ -483,7 +492,15 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     let eventSource: EventSource | null = null;
-    let needsResync = false;
+    let retryTimer: number | null = null;
+
+    const scheduleRetry = () => {
+      if (cancelled || retryTimer !== null) return;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        void start();
+      }, 1500);
+    };
 
     const handleIncomingEvents = async (incoming: CameraEvent[]) => {
       if (cancelled || incoming.length === 0) return;
@@ -510,8 +527,12 @@ export function App() {
     };
 
     const start = async () => {
-      await refreshState();
+      const ok = await refreshState();
       if (cancelled) return;
+      if (!ok) {
+        scheduleRetry();
+        return;
+      }
 
       const es = new EventSource(client.eventsStreamUrl(seqRef.current, eventsCidRef.current));
       eventSource = es;
@@ -519,10 +540,6 @@ export function App() {
       es.onopen = () => {
         if (cancelled) return;
         setConnected(true);
-        if (needsResync) {
-          needsResync = false;
-          void refreshState();
-        }
       };
 
       es.onmessage = (msg) => {
@@ -542,7 +559,11 @@ export function App() {
       es.onerror = () => {
         if (cancelled) return;
         setConnected(false);
-        needsResync = true;
+        es.close();
+        if (eventSource === es) {
+          eventSource = null;
+        }
+        scheduleRetry();
       };
     };
 
@@ -550,6 +571,9 @@ export function App() {
 
     return () => {
       cancelled = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
       if (eventSource) {
         eventSource.close();
       }

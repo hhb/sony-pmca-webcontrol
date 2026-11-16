@@ -160,8 +160,12 @@ public class MacroHttpServer extends NanoHTTPD {
 
             if ("/api/events/stream".equals(uri)) {
                 long since = parseLong(params.get("since"), -1L);
+                long lastId = parseLong(session.getHeaders().get("last-event-id"), -1L);
+                if (lastId > since) {
+                    since = lastId;
+                }
                 if (since < 0L) {
-                    since = parseLong(session.getHeaders().get("last-event-id"), 0L);
+                    since = 0L;
                 }
                 String cid = params.get("cid");
                 SseClient client = acquireSseClient(cid);
