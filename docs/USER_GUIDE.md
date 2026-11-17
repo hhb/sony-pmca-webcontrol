@@ -86,11 +86,21 @@ Open the prebuilt single-file `index.html` (or run `npm run dev` in `web-client/
 > * To save silently into a chosen local folder via `showDirectoryPicker`, open the UI from a secure context: either run `host-server/server.py` (HTTPS over LAN), run `cd web-client && npm run dev` (local HTTPS + `/api` proxy), or serve `dist/index.html` on `http://localhost`.
 
 ### Option B: Host Companion Backend (`host-server/server.py`, Recommended for Local Folder Auto-Save & Stacking)
-Run the zero-dependency Python 3 companion server on your computer to serve `web-client/dist/index.html` over HTTPS, proxy `/api/*` to the camera, unlock `showDirectoryPicker` local-folder **Auto-Save** over your LAN, and enable **OpenFocus** auto-merging:
+Run the zero-dependency Python 3 companion server on your computer to serve the web UI over HTTPS, proxy `/api/*` to the camera, unlock `showDirectoryPicker` local-folder **Auto-Save** over your LAN, and enable **OpenFocus** auto-merging:
+
+1. **Prepare the web UI** (pick one):
+   * **Prebuilt Release (no Node.js required)**: Download `index.html` from GitHub Releases and pass `--web-dist /path/to/index.html`.
+   * **From source**: Run `cd web-client && npm ci && npm run build` once to generate `web-client/dist/index.html`.
+2. **Prepare OpenFocus (optional, for `Auto Merge`)**:
+   * Install `openfocus` into your `PATH`, **or** clone [Xinzhe99/OpenFocus](https://github.com/Xinzhe99/OpenFocus) and install its dependencies, then pass `--openfocus-dir /path/to/OpenFocus` (and `--openfocus-python /path/to/venv/bin/python` if using a separate virtual environment).
+3. **Start the server**:
 ```bash
-python3 host-server/server.py --camera http://<camera-ip>:8080 --openfocus-dir /path/to/OpenFocus
+python3 host-server/server.py \
+  --camera http://<camera-ip>:8080 \
+  --web-dist /path/to/index.html \
+  --openfocus-dir /path/to/OpenFocus
 ```
-Then open `https://localhost:8000` (or `https://<host-ip>:8000` over LAN, accepting the self-signed certificate) in your browser. HTTPS is always enabled so `showDirectoryPicker` Auto-Save works across your LAN.
+Confirm the startup log prints `OpenFocus : True` when Auto Merge is needed, then open `https://localhost:8000` (or `https://<host-ip>:8000` over LAN, accepting the self-signed certificate) in your browser and check **Auto Merge** under `Focus`. HTTPS is always enabled so `showDirectoryPicker` Auto-Save works across your LAN.
 
 ### Option C: Built-in In-Camera UI
 Opening `http://<camera-ip>:8080` directly in any modern browser on your LAN serves the pre-compressed, camera-embedded React UI (`assets/index.html.gzip`, served with `Content-Encoding: gzip`), providing LiveView, Focus Peaking, Exposure/WB/Zoom, Focus Stacking, Save/Auto-Save (via browser downloads), Photos, Events, and RPC Inspector without running a separate host server (only host-side **Auto Merge** is omitted).
